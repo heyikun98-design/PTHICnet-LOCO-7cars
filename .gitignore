@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+
+# Checkpoints
+*.pt
+*.pth
+*.ckpt
+
+# Experiment outputs
+outputs/
+logs/
+runs/
+wandb/
+
+# Data files
+*.feather
+*.pkl
+
+# Virtual environment
+venv/
+.env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code
+.claude/

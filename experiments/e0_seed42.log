@@ -1,0 +1,88 @@
+wandb: Currently logged in as: 7804230118 (7804230118-central-south-university) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: setting up run 8xca2gv3
+wandb: Tracking run with wandb version 0.23.1
+wandb: Run data is saved locally in experiments/X70/regression/2026-05-31_00-53/wandb/run-20260531_005333-8xca2gv3
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run 2026-05-31_00-53
+wandb: ⭐️ View project at https://wandb.ai/7804230118-central-south-university/pt-hicnet
+wandb: 🚀 View run at https://wandb.ai/7804230118-central-south-university/pt-hicnet/runs/8xca2gv3
+PARAMETER ...
+Namespace(config='/data1/user/yikun/project/PT-HICNET/configs/default.yaml', gpu='0', batch_size=15, model='pointnet2_reg_att_props', epoch=200, learning_rate=0.001, num_point=8192, optimizer='Adam', log_dir=None, decay_rate=0.0001, use_normals=False, process_data=False, use_uniform_sample=False, train_data_dir='车模型数据', test_data_dir='车模型数据', seed=42, use_wandb=True, use_early_fusion=False, normalize_thickness=True, ablation_mode='baseline', shape_audit=False, kde_reference_csv=None, delta=150.0, test_vehicles=['JX65'], wandb_project='pt-hicnet')
+Load dataset ...
+Train: 36 files | Test: 6 files (test vehicles: ['JX65'])
+🚗 数据文件 batch_0.feather 对应车辆: C201
+🚗 数据文件 batch_1.feather 对应车辆: C201
+🚗 数据文件 batch_2.feather 对应车辆: C201
+🚗 数据文件 batch_3.feather 对应车辆: C201
+🚗 数据文件 batch_4.feather 对应车辆: C201
+🚗 数据文件 batch_5.feather 对应车辆: C201
+🚗 数据文件 batch_0.feather 对应车辆: EP32
+🚗 数据文件 batch_1.feather 对应车辆: EP32
+🚗 数据文件 batch_2.feather 对应车辆: EP32
+🚗 数据文件 batch_3.feather 对应车辆: EP32
+🚗 数据文件 batch_4.feather 对应车辆: EP32
+🚗 数据文件 batch_5.feather 对应车辆: EP32
+🚗 数据文件 batch_0.feather 对应车辆: CY02C
+🚗 数据文件 batch_1.feather 对应车辆: CY02C
+🚗 数据文件 batch_2.feather 对应车辆: CY02C
+🚗 数据文件 batch_3.feather 对应车辆: CY02C
+🚗 数据文件 batch_4.feather 对应车辆: CY02C
+🚗 数据文件 batch_5.feather 对应车辆: CY02C
+🚗 数据文件 batch_0.feather 对应车辆: M6
+🚗 数据文件 batch_1.feather 对应车辆: M6
+🚗 数据文件 batch_2.feather 对应车辆: M6
+🚗 数据文件 batch_3.feather 对应车辆: M6
+🚗 数据文件 batch_4.feather 对应车辆: M6
+🚗 数据文件 batch_5.feather 对应车辆: M6
+🚗 数据文件 batch_0.feather 对应车辆: S50EVK
+🚗 数据文件 batch_1.feather 对应车辆: S50EVK
+🚗 数据文件 batch_2.feather 对应车辆: S50EVK
+🚗 数据文件 batch_3.feather 对应车辆: S50EVK
+🚗 数据文件 batch_4.feather 对应车辆: S50EVK
+🚗 数据文件 batch_5.feather 对应车辆: S50EVK
+🚗 数据文件 batch_0.feather 对应车辆: FX11
+🚗 数据文件 batch_1.feather 对应车辆: FX11
+🚗 数据文件 batch_2.feather 对应车辆: FX11
+🚗 数据文件 batch_3.feather 对应车辆: FX11
+🚗 数据文件 batch_4.feather 对应车辆: FX11
+🚗 数据文件 batch_5.feather 对应车辆: FX11
+✅ 已加载车辆 C201 的材料查找表，共 20 条
+✅ 成功读取 Feather 文件，共 37 个样本
+Loaded 37 samples
+✅ 成功读取 Feather 文件，共 37 个样本
+Loaded 37 samples
+✅ 成功读取 Feather 文件，共 37 个样本
+Loaded 37 samples
+✅ 成功读取 Feather 文件，共 37 个样本
+Loaded 37 samples
+✅ 成功读取 Feather 文件，共 37 个样本
+Loaded 37 samples
+✅ 成功读取 Feather 文件，共 37 个样本
+Loaded 37 samples
+✅ 已加载车辆 EP32 的材料查找表，共 16 条
+✅ 成功读取 Feather 文件，共 37 个样本
+Loaded 37 samples
+✅ 成功读取 Feather 文件，共 37 个样本
+Loaded 37 samples
+✅ 成功读取 Feather 文件，共 36 个样本
+⚠️ 已排除 1 个HIC值为0的样本点: ['183']
+Loaded 36 samples
+✅ 成功读取 Feather 文件，共 37 个样本
+Loaded 37 samples
+✅ 成功读取 Feather 文件，共 37 个样本
+Loaded 37 samples
+✅ 成功读取 Feather 文件，共 33 个样本
+⚠️ 已排除 2 个HIC值为0的样本点: ['81', '89']
+Loaded 33 samples
+✅ 已加载车辆 CY02C 的材料查找表，共 19 条
+✅ 成功读取 Feather 文件，共 38 个样本
+Loaded 38 samples
+✅ 成功读取 Feather 文件，共 38 个样本
+Loaded 38 samples
+✅ 成功读取 Feather 文件，共 36 个样本
+⚠️ 已排除 2 个HIC值为0的样本点: ['173', '174']
+Loaded 36 samples
+✅ 成功读取 Feather 文件，共 38 个样本
+Loaded 38 samples
+✅ 成功读取 Feather 文件，共 38 个样本
+Loaded 38 samples

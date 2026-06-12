@@ -1,0 +1,92 @@
+/data1/user/yikun/project/PT-HICNET/scripts/train_pt_hicnet.py:267: UserWarning: [ModelConfig] film_mode override: global (yaml) -> none (cli)
+  warnings.warn(
+[LossConfig] resolved delta=150 source=yaml
+[Config] saved config_used.yaml and config_hash.txt to /data1/user/yikun/project/PT-HICNET/experiments/pt_hicnet_ablation_seed42_film-none
+wandb: Currently logged in as: 7804230118 (7804230118-central-south-university) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: setting up run 436tcg4k
+wandb: Tracking run with wandb version 0.23.1
+wandb: Run data is saved locally in /data1/user/yikun/project/PT-HICNET/experiments/pt_hicnet_ablation_seed42_film-none/wandb/run-20260531_005330-436tcg4k
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run pt_hicnet_ablation_seed42_film-none
+wandb: ⭐️ View project at https://wandb.ai/7804230118-central-south-university/pt-hicnet
+wandb: 🚀 View run at https://wandb.ai/7804230118-central-south-university/pt-hicnet/runs/436tcg4k
+🚗 数据文件 batch_0.feather 对应车辆: C201
+✅ 已加载车辆 C201 的材料查找表，共 20 条
+✅ 成功读取 Feather 文件，共 37 个样本
+Loaded 37 samples
+[LossConfig] delta=150 source=yaml
+[LossConfig] effective delta=150 source=yaml
+[BallQuery] npoint=512 r=60 nsample=32 | avg_valid=1024.0  pct_full(>=32)=100%
+[BallQuery] npoint=128 r=150 nsample=32 | avg_valid=512.0  pct_full(>=32)=100%
+[BallQuery] npoint=32 r=400 nsample=32 | avg_valid=128.0  pct_full(>=32)=100%
+[BallQuery] npoint=1 r=1500 nsample=32 | avg_valid=32.0  pct_full(>=32)=100%
+[SmokeTest] passed: feather sample + forward/loss checks are valid.
+Train files: 36  |  Test files: 6  (test vehicles: ['JX65'])
+🚗 数据文件 batch_0.feather 对应车辆: C201
+🚗 数据文件 batch_1.feather 对应车辆: C201
+🚗 数据文件 batch_2.feather 对应车辆: C201
+🚗 数据文件 batch_3.feather 对应车辆: C201
+🚗 数据文件 batch_4.feather 对应车辆: C201
+🚗 数据文件 batch_5.feather 对应车辆: C201
+🚗 数据文件 batch_0.feather 对应车辆: EP32
+🚗 数据文件 batch_1.feather 对应车辆: EP32
+🚗 数据文件 batch_2.feather 对应车辆: EP32
+🚗 数据文件 batch_3.feather 对应车辆: EP32
+🚗 数据文件 batch_4.feather 对应车辆: EP32
+🚗 数据文件 batch_5.feather 对应车辆: EP32
+🚗 数据文件 batch_0.feather 对应车辆: CY02C
+🚗 数据文件 batch_1.feather 对应车辆: CY02C
+🚗 数据文件 batch_2.feather 对应车辆: CY02C
+🚗 数据文件 batch_3.feather 对应车辆: CY02C
+🚗 数据文件 batch_4.feather 对应车辆: CY02C
+🚗 数据文件 batch_5.feather 对应车辆: CY02C
+🚗 数据文件 batch_0.feather 对应车辆: M6
+🚗 数据文件 batch_1.feather 对应车辆: M6
+🚗 数据文件 batch_2.feather 对应车辆: M6
+🚗 数据文件 batch_3.feather 对应车辆: M6
+🚗 数据文件 batch_4.feather 对应车辆: M6
+🚗 数据文件 batch_5.feather 对应车辆: M6
+🚗 数据文件 batch_0.feather 对应车辆: S50EVK
+🚗 数据文件 batch_1.feather 对应车辆: S50EVK
+🚗 数据文件 batch_2.feather 对应车辆: S50EVK
+🚗 数据文件 batch_3.feather 对应车辆: S50EVK
+🚗 数据文件 batch_4.feather 对应车辆: S50EVK
+🚗 数据文件 batch_5.feather 对应车辆: S50EVK
+🚗 数据文件 batch_0.feather 对应车辆: FX11
+🚗 数据文件 batch_1.feather 对应车辆: FX11
+🚗 数据文件 batch_2.feather 对应车辆: FX11
+🚗 数据文件 batch_3.feather 对应车辆: FX11
+🚗 数据文件 batch_4.feather 对应车辆: FX11
+🚗 数据文件 batch_5.feather 对应车辆: FX11
+✅ 成功读取 Feather 文件，共 37 个样本
+Loaded 37 samples
+✅ 成功读取 Feather 文件，共 37 个样本
+Loaded 37 samples
+✅ 成功读取 Feather 文件，共 37 个样本
+Loaded 37 samples
+✅ 成功读取 Feather 文件，共 37 个样本
+Loaded 37 samples
+✅ 成功读取 Feather 文件，共 37 个样本
+Loaded 37 samples
+✅ 成功读取 Feather 文件，共 37 个样本
+Loaded 37 samples
+✅ 已加载车辆 EP32 的材料查找表，共 16 条
+✅ 成功读取 Feather 文件，共 37 个样本
+Loaded 37 samples
+✅ 成功读取 Feather 文件，共 37 个样本
+Loaded 37 samples
+✅ 成功读取 Feather 文件，共 36 个样本
+⚠️ 已排除 1 个HIC值为0的样本点: ['183']
+Loaded 36 samples
+✅ 成功读取 Feather 文件，共 37 个样本
+Loaded 37 samples
+✅ 成功读取 Feather 文件，共 37 个样本
+Loaded 37 samples
+✅ 成功读取 Feather 文件，共 33 个样本
+⚠️ 已排除 2 个HIC值为0的样本点: ['81', '89']
+Loaded 33 samples
+✅ 已加载车辆 CY02C 的材料查找表，共 19 条
+✅ 成功读取 Feather 文件，共 38 个样本
+Loaded 38 samples
+✅ 成功读取 Feather 文件，共 38 个样本
+Loaded 38 samples

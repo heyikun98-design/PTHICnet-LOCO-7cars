@@ -1,0 +1,52 @@
+experiment:
+  name: pt_hicnet_ablation
+  output_root: experiments
+  seeds:
+  - 42
+  - 3407
+  - 2026
+data:
+  data_root: 车模型数据
+  train_data_dir: ''
+  test_data_dir: ''
+  test_vehicles:
+  - JX65
+  material_lookup_path: feather/material_lookup_by_vehicle.pkl
+  normalization_params_path: feather/normalization_params.pkl
+  num_point: 8192
+  use_uniform_sample: false
+  use_normals: false
+  early_fusion: true
+  normalize_thickness: true
+training:
+  batch_size: 15
+  epoch: 50
+  learning_rate: 0.001
+  decay_rate: 0.0001
+  optimizer: Adam
+  scheduler_step_size: 20
+  scheduler_gamma: 0.7
+  gpu: '0'
+  num_workers: 0
+  use_wandb: true
+  wandb_project: pt-hicnet
+model:
+  ablation_mode: pt_hicnet
+  in_channels: 19
+  use_early_fusion: true
+  pt_layers: 4
+  pt_radius:
+  - 60
+  - 150
+  - 400
+  - 1500
+  pt_nsample:
+  - 32
+  - 32
+  - 32
+  - 32
+  film_mode: none
+loss:
+  type: kde_weighted_huber
+  delta: 5.0
+  kde_reference_csv: feather/data_utils/y_train(1).csv
