@@ -55,6 +55,8 @@ def parse_args():
     parser.add_argument("--restore_best", action="store_true", default=None, help="Restore best acc weights on early stop")
     parser.add_argument("--adult_hic_weight", type=float, default=None, help="Loss weight multiplier for adult high-HIC samples (0=disabled)")
     parser.add_argument("--adult_hic_threshold", type=float, default=None, help="HIC threshold for adult weighting (default 1000)")
+    parser.add_argument("--material_dropout_prob", type=float, default=None, help="Drop probability for material z-score channels 4:19 (0=disabled)")
+    parser.add_argument("--material_jitter_std", type=float, default=None, help="Gaussian jitter std for material z-score channels 4:19 (0=disabled)")
     parser.add_argument("--test_vehicles", type=str, nargs="+", default=None, help="Override test vehicles (e.g., --test_vehicles C201 EP32)")
     parser.add_argument("--val_split", type=float, default=0.0, help="Fraction of training data to use for validation (0=skip)")
     parser.add_argument("--split_seed", type=int, default=2026, help="Seed for train/val split (independent of training seed)")
@@ -265,6 +267,21 @@ def neg_rate(pred):
     return (pred < 0).float().mean().item()
 
 
+def apply_material_augmentation(fused_input_np, dropout_prob=0.0, jitter_std=0.0):
+    """Regularize material z-score channels without changing xyz/thickness."""
+    if fused_input_np.shape[-1] < 19:
+        return fused_input_np
+    material = fused_input_np[:, :, 4:19]
+    if jitter_std > 0:
+        noise = np.random.normal(0.0, jitter_std, size=material.shape).astype(material.dtype)
+        material = material + noise
+    if dropout_prob > 0:
+        keep_mask = np.random.random(size=material.shape) >= dropout_prob
+        material = np.where(keep_mask, material, 0.0).astype(fused_input_np.dtype)
+    fused_input_np[:, :, 4:19] = material
+    return fused_input_np
+
+
 def main():
     args = parse_args()
     cfg = load_config(args.config)
@@ -284,6 +301,22 @@ def main():
     model_cfg["film_mode"] = resolved_film_mode
 
     resolved_delta, delta_source = resolve_delta(loss_cfg)
+    material_dropout_prob = (
+        args.material_dropout_prob
+        if args.material_dropout_prob is not None
+        else float(train_cfg.get("material_dropout_prob", 0.0))
+    )
+    material_jitter_std = (
+        args.material_jitter_std
+        if args.material_jitter_std is not None
+        else float(train_cfg.get("material_jitter_std", 0.0))
+    )
+    if not 0.0 <= material_dropout_prob < 1.0:
+        raise ValueError(f"material_dropout_prob must be in [0, 1), got {material_dropout_prob}")
+    if material_jitter_std < 0.0:
+        raise ValueError(f"material_jitter_std must be >= 0, got {material_jitter_std}")
+    train_cfg["material_dropout_prob"] = float(material_dropout_prob)
+    train_cfg["material_jitter_std"] = float(material_jitter_std)
 
     use_wandb = args.use_wandb if args.use_wandb is not None else bool(train_cfg.get("use_wandb", False))
     wandb_project = train_cfg.get("wandb_project", "pt-hicnet")
@@ -499,6 +532,11 @@ def main():
     )
     if adult_hic_weight > 0:
         print(f"[LossWeight] adult_hic_weight={adult_hic_weight}  threshold={adult_hic_threshold}")
+    if material_dropout_prob > 0 or material_jitter_std > 0:
+        print(
+            f"[MaterialAug] dropout_prob={material_dropout_prob:.4g} "
+            f"jitter_std={material_jitter_std:.4g} on channels 4:19"
+        )
 
     best_mse = float("inf")
     best_acc = 0.0
@@ -519,6 +557,11 @@ def main():
             fused_input_np = provider.random_point_dropout(fused_input_np)
             fused_input_np[:, :, 0:3] = provider.random_scale_point_cloud(fused_input_np[:, :, 0:3])
             fused_input_np[:, :, 0:3] = provider.shift_point_cloud(fused_input_np[:, :, 0:3])
+            fused_input_np = apply_material_augmentation(
+                fused_input_np,
+                dropout_prob=material_dropout_prob,
+                jitter_std=material_jitter_std,
+            )
             fused_input = torch.tensor(fused_input_np, dtype=torch.float32)
 
             fused_input = fused_input.to(device).transpose(2, 1)

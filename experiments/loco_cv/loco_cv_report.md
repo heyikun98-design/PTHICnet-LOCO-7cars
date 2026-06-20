@@ -4,7 +4,7 @@
 > Protocol: `val_split=0.15 split_seed=2026 seed=42 patience=50 restore_best`
 > Main metric: **test accuracy @ best-val-checkpoint** (Val/Test/Gap three-column)
 > E0/E1: PointNet++ via `feather/train_reg_att_props_X70_feather.py` (StepLR scheduler)
-> E2/E3/E4: Point Transformer via `scripts/train_pt_hicnet.py` (CosineAnnealing scheduler)
+> E2/E3/E4: Point Transformer via `scripts/train_pt_hicnet.py` (StepLR scheduler)
 > ⚠️ Single-seed; multi-seed pending new data (Phase 5).
 
 ---
@@ -146,7 +146,7 @@
 ## Limitations
 
 - Single seed (42); multi-seed pending new data (Phase 5).
-- E0/E1 use StepLR scheduler vs E2-E4 CosineAnnealing.
+- E0/E1 and E2-E4 both use StepLR, but through different training scripts.
 - E0/E1 metric aggregation (batch-level) differs slightly from E2-E4 (epoch-level).
 - >2k HIC bucket has n=4 per fold — high variance.
 - E1 JX65 fold has negative Val−Test gap (−2.7pp) — anomaly worth investigating.

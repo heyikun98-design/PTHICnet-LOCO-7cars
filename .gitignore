@@ -30,5 +30,9 @@ venv/
 .vscode/
 .idea/
 
+# Phase 4.4b pilot output (bulky training artifacts)
+experiments/pt_hicnet_loco_e3_matdrop015_*/
+experiments/material_awareness/
+
 # Claude Code
 .claude/

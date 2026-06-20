@@ -67,6 +67,8 @@ python scripts/eval_pt_hicnet.py \
 - **E4 deep FiLM 系统过拟合**：Val 86.22%（最高）但 Test 低于 E3
 
 > 详细 per-fold 数据、难车（CY02C/M6）分析见 `PT_HICnet_Report_Material.md` 与 `experiments/loco_cv/loco_cv_report.md`。
+> 
+> **Phase 4 难车诊断（收口）：** CY02C hard fold 主要退化与 material-vector distribution shift 有关。Hard-only 材料向量在 Ball Query 邻域富集 2×，PT Vector Attention 对未见材料过拟合。Material-channel dropout (prob=0.15) 在 held-out CY02C 单折上将 E3−E0 gap 从 −5.63pp 收窄至 −1.72pp，方向验证通过。Phase 5 将采用 `--material_dropout_prob 0.15` 作为标准训练配置。详见 `eval_protocol.md`、`experiments/error_analysis/hard_cars/hard_car_analysis.md`。
 
 ## 项目结构
 
@@ -113,4 +115,3 @@ PT-HICNET/
 
 ---
 
-> 项目负责人：中汽研（CAERI）安全团队 × 深度学习合作方

@@ -1,0 +1,2 @@
+lookup_path,normal_vehicle_count,hard_vehicle_count,normal_unique_ids,hard_unique_ids,id_overlap,hard_only_ids,hard_only_id_list,normal_unique_vectors,hard_unique_vectors,vector_overlap,hard_only_vectors
+/data1/user/yikun/project/PT-HICNET/feather/material_lookup_by_vehicle.pkl,5,2,83,28,6,22,666;667;10011;10013;10022;1000002;1000003;1000010;1000013;1000017;1000024;1000026;1000027;1000028;1000030;1000032;1000033;41000001;70000006;70000007;71004407;71004412,51,18,14,4

@@ -289,7 +289,7 @@ out = LayerNorm(out + FFN(out))
 | FX11 | 70.23% | 69.86% | 75.27% | **76.13%** | 72.48% | +5.90pp |
 | **Mean** | **71.21%** | **72.56%** | **77.63%** | **78.39%** | 76.75% | **+7.18pp** |
 
-> † **JX65 E1 异常标注**：E1 fold2_JX65 Val=77.31% → Test=80.04%，Gap=−2.7pp，是 35 折中**唯一** Test 超过 Val 的一折。可能原因：(1) val_split=0.15 下 JX65 的 val 子集碰巧偏难；(2) E1 使用 StepLR scheduler（与 E2–E4 的 CosineAnnealing 不同），val 曲线波动更大。此 80.04% 为单折现象，**不作为 E1 优于 PT 的证据**——E1 的 5-normal mean 仅 72.56%，低于所有 PT 变体。
+> † **JX65 E1 异常标注**：E1 fold2_JX65 Val=77.31% → Test=80.04%，Gap=−2.7pp，是 35 折中**唯一** Test 超过 Val 的一折。可能原因：(1) val_split=0.15 下 JX65 的 val 子集碰巧偏难；(2) E1 与 PT 变体虽同为 StepLR 口径，但训练脚本和模型族不同，val 曲线波动更大。此 80.04% 为单折现象，**不作为 E1 优于 PT 的证据**——E1 的 5-normal mean 仅 72.56%，低于所有 PT 变体。
 
 ### 4.3 难车 CY02C / M6：Test 掉点与 Val-Test Gap
 

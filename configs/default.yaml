@@ -28,6 +28,8 @@ training:
   num_workers: 0
   use_wandb: true
   wandb_project: "pt-hicnet"
+  material_dropout_prob: 0.0
+  material_jitter_std: 0.0
 
 model:
   # 注: ablation_mode 仅 baseline 脚本 (feather/train_reg_att_props_X70_feather.py) 读取

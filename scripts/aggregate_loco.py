@@ -166,7 +166,7 @@ def print_per_vehicle_table(agg_results):
         line += f" {a:>8}"
     line += f" {'Winner':>8}"
     for a in arches[1:]:
-        line += f" {a}-E0:>8" if a != "E0" else ""
+        line += f" {a+'-E0':>8}"
     print(line)
     print("-" * (50 + len(arches) * 9))
 

@@ -1,28 +1,47 @@
 # PT-HICnet 实施计划（当前执行版）
 
-> 更新日期：2026-06-05
-> **Phase 3c 完成！** 五架构全量 LOCO-CV (35/35 folds) 就位。下一阶段：Phase 4 管线固化 + 失效分析。
+> 更新日期：2026-06-20
+> **Phase 3 全部完成。Phase 4 收口（主体诊断完成）。**
+> Phase 5 触发条件：新数据到位 + `eval_protocol.md` QA checklist 通过后启动。
 
 ---
 
 ## 0) 当前里程碑状态
 
-- ✅ Phase 1 已完成：损失策略锁定为 `delta=150 + 无 KDE`。
-- ✅ Phase 2 已完成：E0/E1/E2/E3/E4 全部 15 个 seed 结果可比。
+### Phase 1–3（全部完成 ✅）
+- ✅ Phase 1：损失策略锁定 `delta=150 + 无 KDE`
+- ✅ Phase 2：E0–E4 全部 15 seed 结果可比
 - ✅ Phase 3 Early Stopping 验证通过（patience=50 + restore_best）
-- ✅ Phase 3 误差分析完成 → 暴露 Adult 高 HIC 弱点
-- ✅ AHW (Adult HIC Weighted) → NO-GO
-- ✅ **E3 LOCO-CV 7 折完成**
-- ✅ **E0+E2 LOCO-CV 7/7 完成**
-- ✅ **Phase 3c: E1+E4 LOCO-CV 7/7 完成** — 五架构全量 LOCO-CV (35/35 folds) 就位
-  - E4 Val 最高 (86.22%) 但 Test 不如 E2 (76.75% vs 77.63% 5-normal) — deep FiLM 是过拟合器
-  - E1 ≈ E0 (69.24% vs 69.02%) — EarlyFusion 在 PN++ 上跨车无效
-- ⏳ 难车 error analysis：CY02C/M6 失效分析模板
-- ⏳ 管线固化：freeze config + eval script + 版本标签
-- ⏳ 定义新数据验收门槛（E2−E0 ≥ +Xpp 等）
-- 🚫 **Multi-seed: 暂缓至 Phase 5**（新数据并入后一次性做最终统计）
-- ⏳ Phase 4: 数据扩充与清洗（新增车型）
-- ⏳ Phase 5: 在新全量数据上 multi-seed 最终统计
+- ✅ AHW → NO-GO
+- ✅ Phase 3a–3c：五架构 35/35 LOCO-CV 全量完成
+  - E3 5-Normal 78.39% 当前最优；E2−E0 = **+6.42pp**（PT backbone 唯一显著贡献）
+  - FiLM global +0.76pp 不显著；FiLM deep −0.88pp 有害
+  - Hard car Gap >24pp — PT 路线在 CY02C/M6 上弱于 PN++ baseline
+
+### Phase 4（收口，主体诊断完成 ✅）
+- ✅ **4.1 冻结基线**：`eval_protocol.md` 补全聚合差异声明 + 具体验收门槛；`aggregate_loco.py` 表头已修
+- ✅ **4.2 难车诊断**：full inference 完成（exit=0）；**尺度假说排除**（hard car bbox ≈ normal）；**材料漂移成立**：mat_02 raw PR 0.315→0.289（Cohen d=−1.09），mat_03-08 应力-应变 0.001 段 raw 差 48–78 MPa；ID overlap 低（6/28）但向量 overlap 高（14/18），M6 材料全在 normal 中出现过；E0 vs E3 paired delta：246 负 219 正 — CY02C 系统性变差、M6 tail/outlier 混合；M6 单样本 HIC=140k 驱动 MSE 爆炸
+- ✅ **4.3 验收门槛**：已写入 `eval_protocol.md`（E2−E0 ≥ +5.0pp 5N / ≥ +3.0pp 7C，E3−E2 ≥ +1.5pp + 4/5，Hard Gap ≤ 20pp 或 ↓5pp）
+- ✅ **4.4a material-aware failure localization（CPU 诊断）**
+  - 已给每个 CY02C 样本打标：hard-only material vector 标志、hard-only 节点占比、hard-only 节点与 HIC point 距离
+  - 相关分析完成：连续暴露强度与 E3−E0 delta 负相关（r_frac=-0.314, r_top32=-0.245）
+  - 结论：材料 OOD 是合理方向，优先做不泄漏 CY02C test-domain 的 material regularization
+- ✅ **4.4b material dropout pilot 验证通过**
+  - E3 global + material_dropout_prob=0.15，CY02C held-out 单折（seed=42，patience=50，restore_best）
+  - 结果（best-val-acc 口径）：
+    | 配置 | CY02C Test Acc | E3−E0 Δ |
+    |------|:---:|:---:|
+    | E0 baseline | 64.23% | — |
+    | E3 global | 58.60% | −5.63pp |
+    | E3 + matdrop 0.15 | 62.51% | −1.72pp |
+  - **结论**：material dropout 将 E3 相对 E0 的 gap 从 −5.63pp 收窄到 −1.72pp（追回约 3.9pp），且 Val Acc 未受损（84.92% → 84.88%），Test MSE 减半。材料正则化方向成立，`material_dropout_prob=0.15` 写入 Phase 5 标准配置。
+  - ⚠️ 叙事口径：material dropout 显著收窄了 PT 在 CY02C 上的退化，但未完全追平 E0。不声称"解决"，只声称"方向验证通过，证据链足够强，足以进入 Phase 5"。
+- ➡️ **4.5 分档实验（跳过）**：不再单独扩到 M6/normal folds。Material dropout 全量验证合并入 Phase 5。
+- ⏳ **数据清单**：明确新车型数量、预期样本量、HIC 分布概况（待新数据到位后补充）
+
+### 暂停项
+- 🚫 E5 physical pooling：等难车诊断结论后再定方向
+- 🚫 Multi-seed：Phase 5 第三档执行
 
 ---
 
@@ -145,8 +164,8 @@
 - [x] E1 + E4 各 7 折全部跑通 (E1 69.24%, E4 72.71%)
 - [x] 5 架构全 LOCO 排名表产出（`aggregate_loco.py --architectures all`）
 - [x] `loco_cv_report.md` 五架构版完成
-- [ ] 难车 error analysis 模板（→ Phase 4）
-- [ ] 固化 config + eval 脚本版本标签（→ Phase 4）
+- [x] 难车 error analysis 模板（→ Phase 4）
+- [x] **固化 config + eval 脚本版本标签**（→ Phase 4 已完成）
 
 ---
 
@@ -157,26 +176,35 @@
 
 ### DoD
 
-- [ ] **管线固化**：freeze 一版 `configs/default.yaml` + eval script + 版本标签（如 `v1.0-pre-expansion`）
-- [ ] **失效分析模板**：CY02C/M6 per-sample error analysis → 可复用脚本，新数据到了直接套
-- [ ] **验收门槛定义**：
-  - E2−E0 (PT backbone gain) ≥ +Xpp on full-car mean（X 基于当前 5-normal-car 给出下限）
-  - Val Std ≤ Ypp（跨车收敛一致性）
-  - Hard-car Gap ≤ Zpp（不过度恶化）
+- [x] **管线固化**：freeze 一版 `configs/default.yaml` + eval script + 版本标签 `v1.0-pre-expansion`；`material_dropout_prob=0.0` 保证基线复现不变
+- [x] **失效分析模板**：CY02C/M6 per-sample error analysis → `scripts/error_analysis_hard_cars.py`
+- [x] **验收门槛定义**：
+  - E2−E0 ≥ +5.0pp on 5-normal Test Mean
+  - E2−E0 ≥ +3.0pp on 7-car Test Mean
+  - E3−E2 ≥ +1.5pp and positive on at least 4/5 normal vehicles before claiming FiLM
+  - Hard-car Gap ≤ 20pp, or improve by ≥5pp vs current E3 hard gaps
+- [x] **数据 QA checklist**：新增材料 z-score/raw-unit 分布、MID/材料向量覆盖、bbox 尺度、HIC tail、HIC=0 排除样本检查
 - [ ] **数据清单**：明确新车型数量、预期样本量、HIC 分布概况
-- [ ] **评估口径文档**：best-checkpoint vs stop-epoch、Val/Test/Gap 三栏定义、JX65 soft check 规则 —— 写入单页 `eval_protocol.md`
+- [x] **评估口径文档**：best-checkpoint vs stop-epoch、Val/Test/Gap 三栏定义、JX65 soft check 规则 —— `eval_protocol.md`
 
 ---
 
 ## 5) Phase 5: 新全量数据 Multi-seed 最终统计
 
 ### 触发条件
-Phase 4 数据扩充完成后启动。
+新数据到位 + `eval_protocol.md` Expanded-Data QA Gates 全部通过后启动。
+
+### 配置
+- 主架构 E3：`material_dropout_prob=0.15` + `material_jitter_std=0.0`（Phase 5 标准配置）
+- 对照架构 E2：同配置，验证 material dropout 在无 FiLM 场景下的效果
+- E0 baseline：不变（PN++ 无材料通道 dropout 概念）
+- 可选项：E3 + material_dropout_prob=0.0 作为消融对照（1 seed × 全车型）
 
 ### 范围
 - E0/E2/E3: 3 seeds (42/3407/2026) × 全车型
 - E1/E4: 视资源决定全量或抽样（基于 Phase 3c 单 seed 结论）
 - 统一输出：mean ± std × seed、per-car ranking、val/test gap 跨种子统计
+- 验收：按 `eval_protocol.md` 5 条硬门槛逐项对表
 
 ---
 
@@ -189,19 +217,31 @@ Phase 4 数据扩充完成后启动。
 - **实验口径风险（中）**
   - 对策：报告中固定统一口径；附录列出脚本差异
 - **运行环境风险（中）**
-  - 对策：固定脚本入口、固定 run 命名规则、保留清理策略
+  - 对策：固定脚本入口、固定 run 命名规则、耗时实验统一放在 `screen` 中运行并保留日志、保留清理策略
 
 ---
 
 ## 7) 立即可执行命令（备忘）
 
 ```bash
-# 检查 Phase 3c 进度
-ps aux | grep -E "train_pt|train_reg" | grep -v grep
-screen -ls | grep -E "E[14]"
+# 耗时任务统一进入 screen
+screen -S pthicnet_phase4_hardcars
+/data1/user/yikun/.conda/envs/dl/bin/python -u scripts/error_analysis_hard_cars.py \
+  --architectures E0 E2 E3 E4 \
+  --vehicles CY02C M6 \
+  --run_data_diagnostics \
+  --run_inference \
+  2>&1 | tee experiments/error_analysis/hard_cars/run_inference.log
 
-# E1/E4 完成后：多架构聚合
-python scripts/aggregate_loco.py --results_root experiments  # 需先升级多架构支持
+# 已有 hard_car_per_sample.csv 后，刷新 CPU 诊断/报告即可
+/data1/user/yikun/.conda/envs/dl/bin/python -u scripts/error_analysis_hard_cars.py \
+  --architectures E0 E2 E3 E4 \
+  --vehicles CY02C M6 \
+  --run_data_diagnostics \
+  --reuse_inference_csv
+
+# 多架构聚合
+python scripts/aggregate_loco.py --architectures all --results_root experiments
 ```
 
 ---
