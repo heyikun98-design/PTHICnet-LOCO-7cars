@@ -1,7 +1,5 @@
 # PT-HICnet 技术素材：架构、参数与 LOCO 战绩
 
-> **用途**：中汽研（CAERI）安全专家汇报素材  
-> **生成日期**：2026-06-10  
 > **数据来源**：`configs/default.yaml` · `models/pt_hicnet.py` · `models/point_transformer_layer.py` · `models/point_transformer_block.py` · `feather/data_utils/HICLoader_feather.py` · `experiments/loco_cv/loco_cv_report.md`  
 > **说明**：本文档仅提取与归纳，不修改任何代码。
 
