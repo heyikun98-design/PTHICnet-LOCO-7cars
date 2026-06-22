@@ -17,11 +17,11 @@ pip list | grep -E "numpy|pandas|pyarrow|wandb"
 
 ### 0.2 代码同步
 
-从 GitHub 拉最新代码（包含 Phase 4 所有产出）：
+从 GitHub 拉最新代码（包含 Phase 4 收口 + Phase 5 prep）：
 
 ```bash
 git clone https://github.com/heyikun98-design/PTHICnet-LOCO-7cars.git
-# 或 git pull origin main
+# 或 cd PT-HICNET && git pull origin main
 ```
 
 ### 0.3 新数据挂载
@@ -32,9 +32,9 @@ ls 车模型数据/
 # 预期: car1 car2 ... car{N}  (N >= 8)
 ```
 
-### 0.4 注册新车型
+### 0.4 注册新车型 + 检查材料 lookup
 
-编辑 `feather/data_utils/HICLoader_feather.py`，在 `CAR_TO_VEHICLE` 字典中添加新车型映射：
+**Step 1**: 编辑 `feather/data_utils/HICLoader_feather.py`，在 `CAR_TO_VEHICLE` 字典中添加新车型映射：
 
 ```python
 CAR_TO_VEHICLE = {
@@ -52,6 +52,20 @@ CAR_TO_VEHICLE = {
 }
 ```
 
+**Step 2**: 确认新车在材料 lookup 表中有对应条目。`material_lookup_by_vehicle.pkl` 按 vehicle code 索引，新车缺失会静默用零材料矩阵继续训练——这是最隐蔽的污染。
+
+```bash
+python -c "
+import pickle
+with open('feather/material_lookup_by_vehicle.pkl', 'rb') as f:
+    lookup = pickle.load(f)
+print('Vehicles in lookup:', sorted(lookup.keys()))
+print('Expected vehicles:', ['C201','EP32','JX65','CY02C','M6','S50EVK','FX11'] + NEW_CARS)
+"
+```
+
+**如果新车不在 lookup 中**：用原始材料数据库重新生成 lookup，或至少用最相似的已有车型的材料表作为 fallback。不要用零矩阵。
+
 ---
 
 ## 1. 新数据 QA（训练前必做）
@@ -61,7 +75,7 @@ CAR_TO_VEHICLE = {
 ```bash
 python scripts/qa_new_data.py \
   --data_dir 车模型数据 \
-  --old_normal_union C201,EP32,JX65,S50EVK,FX11 \
+  --old_normal_vehicles C201,EP32,JX65,S50EVK,FX11 \
   --output_dir experiments/phase5_qa
 ```
 
@@ -92,6 +106,52 @@ python scripts/qa_new_data.py \
 
 ## 2. 训练
 
+### 2.0 Cluster Preflight（跑全量之前必做）
+
+在开 100+ folds 之前，先跑一个最小闭环验证链路：
+
+```bash
+# 选 1 辆 old normal + 1 辆 hard/new（共 2 folds）
+PREFLIGHT_VEHICLES=(JX65 CY02C)  # 或替换为新车中代表硬车的那个
+ARCHS=(E0 E2 E3)
+SEED=42
+
+for V in "${PREFLIGHT_VEHICLES[@]}"; do
+  # E0: baseline 脚本（参数名不同，见下方 2.2 E0 独立 loop）
+  python feather/train_reg_att_props_X70_feather.py \
+    --config configs/default.yaml \
+    --test_vehicles $V \
+    --seed $SEED \
+    ...  # 见 2.2 完整命令
+
+  # E2/E3: PT 脚本
+  python scripts/train_pt_hicnet.py \
+    --config configs/default.yaml \
+    --test_vehicles $V \
+    --seed $SEED \
+    --film_mode none \   # E2
+    --material_dropout_prob 0.15 \
+    --val_split 0.15 --patience 50 --restore_best
+
+  python scripts/train_pt_hicnet.py \
+    --config configs/default.yaml \
+    --test_vehicles $V \
+    --seed $SEED \
+    --film_mode global \   # E3
+    --material_dropout_prob 0.15 \
+    --val_split 0.15 --patience 50 --restore_best
+done
+```
+
+**Preflight 通过的 4 个条件：**
+
+1. 每个 (arch, vehicle) 组合落在独立目录，**不互相覆盖**（检查 `experiments/` 下生成了 6 个不同目录名）
+2. 每个 `history.json` 有完整的 `val_accuracy` / `test_accuracy` 字段
+3. `aggregate_loco.py` 能读到这些 fold 并产出 per-vehicle 表
+4. E3+matdrop test acc 不出明显异常（vs Phase 4 frozen baseline: JX65 ~78%, CY02C ~62%）
+
+**只有这个闭环全绿了，才开 2.3 的批量 LOCO-CV。**
+
 ### 2.1 总览
 
 | 优先级 | 架构 | Seeds | 配置 | GPU 估算 |
@@ -118,53 +178,77 @@ python scripts/qa_new_data.py \
 
 ### 2.3 LOCO-CV 批量执行
 
-在集群上写一个 shell 脚本，遍历所有车型作为 test fold：
+**E0/E1 使用 baseline 脚本**（`feather/train_reg_att_props_X70_feather.py`），不支持 `--film_mode`、`--patience`、`--restore_best`。单独写 loop。
+
+**E0 loop（baseline 脚本）**:
 
 ```bash
 #!/bin/bash
-# run_phase5_loco.sh — 集群执行脚本
-
-VEHICLES=(C201 EP32 JX65 CY02C M6 S50EVK FX11 NEW_CAR_A NEW_CAR_B)  # 填入全部车型
+VEHICLES=(C201 EP32 JX65 CY02C M6 S50EVK FX11 NEW_CAR_A NEW_CAR_B)
 SEEDS=(42 3407 2026)
-CONDA_ENV=/path/to/your/conda/env
-PROJ_DIR=/path/to/PT-HICNET
 
-for ARCH in E0 E2 E3; do
-  # 确定 arch 特定参数
-  if [ "$ARCH" = "E0" ]; then
-    FILM="none"
-    EXTRA=""
-    SCRIPT="feather/train_reg_att_props_X70_feather.py"  # 或对应的 baseline 脚本
-  elif [ "$ARCH" = "E2" ]; then
-    FILM="none"
-    EXTRA="--material_dropout_prob 0.15"
-    SCRIPT="scripts/train_pt_hicnet.py"
-  elif [ "$ARCH" = "E3" ]; then
-    FILM="global"
-    EXTRA="--material_dropout_prob 0.15"
-    SCRIPT="scripts/train_pt_hicnet.py"
-  fi
+for SEED in "${SEEDS[@]}"; do
+  for V in "${VEHICLES[@]}"; do
+    python -u feather/train_reg_att_props_X70_feather.py \
+      --config configs/default.yaml \
+      --seed $SEED \
+      --test_vehicles $V \
+      --val_split 0.15 \
+      --split_seed 2026 \
+      --batch_size 15 \
+      2>&1 | tee experiments/phase5_logs/E0_seed${SEED}_${V}.log
+  done
+done
+```
 
+⚠️ **E0 baseline 脚本的 CLI 参数名可能与 train_pt_hicnet.py 不同**。如果 baseline 脚本不支持 `--test_vehicles`/`--val_split`/`--split_seed`/`--seed`，需要先确认其参数列表：
+```bash
+python feather/train_reg_att_props_X70_feather.py --help
+```
+
+**E2 + E3 loop（PT 脚本）**:
+
+```bash
+#!/bin/bash
+VEHICLES=(C201 EP32 JX65 CY02C M6 S50EVK FX11 NEW_CAR_A NEW_CAR_B)
+SEEDS=(42 3407 2026)
+
+for ARCH in E2 E3; do
+  if [ "$ARCH" = "E2" ]; then FILM="none"; else FILM="global"; fi
   for SEED in "${SEEDS[@]}"; do
-    for VEHICLE in "${VEHICLES[@]}"; do
-      echo "=== $ARCH | seed=$SEED | test=$VEHICLE ==="
-      $CONDA_ENV/bin/python -u $SCRIPT \
+    for V in "${VEHICLES[@]}"; do
+      python -u scripts/train_pt_hicnet.py \
         --config configs/default.yaml \
         --seed $SEED \
         --film_mode $FILM \
-        --test_vehicles $VEHICLE \
+        --test_vehicles $V \
         --val_split 0.15 \
         --split_seed 2026 \
         --patience 50 \
         --restore_best \
-        $EXTRA \
-        2>&1 | tee experiments/phase5_logs/${ARCH}_seed${SEED}_${VEHICLE}.log
+        --material_dropout_prob 0.15 \
+        2>&1 | tee experiments/phase5_logs/${ARCH}_seed${SEED}_${V}.log
     done
   done
 done
 ```
 
-**注意 E0/E1 使用 baseline 训练脚本**（`feather/train_reg_att_props_X70_feather.py`），需要确认其 CLI 参数兼容。如果 baseline 脚本不支持 `--test_vehicles` 等参数，单独写一个 E0/E1 的 loop。
+**P1 对照：E3 + material_dropout_prob=0.0（seed=42 only）**:
+
+```bash
+for V in "${VEHICLES[@]}"; do
+  python -u scripts/train_pt_hicnet.py \
+    --config configs/default.yaml \
+    --seed 42 \
+    --film_mode global \
+    --test_vehicles $V \
+    --val_split 0.15 --split_seed 2026 --patience 50 --restore_best \
+    --material_dropout_prob 0.0 \
+    2>&1 | tee experiments/phase5_logs/E3_nodropout_seed42_${V}.log
+done
+```
+
+**P2 建议（如有 GPU 余量）：E2 + material_dropout_prob=0.0，seed=42，全车型。** E2−E0 的提升会混有 "PT backbone" + "material regularization" 两个因素。不加这个对照，无法分离各自贡献。
 
 ### 2.4 集群执行策略
 
@@ -208,15 +292,25 @@ Smoke test 通过后再启动全量 LOCO-CV。
 python scripts/aggregate_loco.py \
   --architectures E0 E2 E3 \
   --results_root experiments
-
-# 多 seed 聚合（如有需要）
-python scripts/aggregate_loco.py \
-  --architectures E0 E2 E3 \
-  --results_root experiments \
-  --multi_seed
 ```
 
-输出文件保存在 `experiments/loco_cv/`。
+⚠️ **当前 `aggregate_loco.py` 硬编码了 7 车列表和 normal/hard 分组**（`VEHICLES`, `NORMAL_CARS`, `HARD_CARS` 在脚本顶部）。Phase 5 新增车型后，需要修改这三行：
+
+```python
+VEHICLES = ["C201", "EP32", "JX65", "CY02C", "M6", "S50EVK", "FX11",
+            "NEW_CAR_A", "NEW_CAR_B"]  # 添加新车
+NORMAL_CARS = ["C201", "EP32", "JX65", "S50EVK", "FX11", "NEW_CAR_A"]  # 按 QA 分组
+HARD_CARS = ["CY02C", "M6", "NEW_CAR_B"]  # 按 QA 分组
+```
+
+如果新车型多、分组不确定，先改成从命令行或配置文件读取，避免每次改代码。
+
+**注意 `aggregate_loco.py` 目前只在 stdout 打印表格，不写入文件。** 用 `tee` 保存：
+
+```bash
+python scripts/aggregate_loco.py --architectures E0 E2 E3 --results_root experiments \
+  2>&1 | tee experiments/phase5_aggregate.txt
+```
 
 ---
 

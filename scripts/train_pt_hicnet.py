@@ -337,8 +337,18 @@ def main():
     seed = args.seed if args.seed is not None else exp_cfg["seeds"][0]
     set_seed(seed)
 
+    # Resolve test vehicles early so we can disambiguate run directories.
+    # Only append vehicle tag when --test_vehicles is explicitly passed via CLI;
+    # otherwise keep backward-compatible naming (Phase 3 LOCO exp_names already
+    # include fold/vehicle info).
+    test_vehicles = args.test_vehicles if args.test_vehicles is not None else data_cfg.get("test_vehicles", ["JX65"])
+
     exp_name = args.exp_name if args.exp_name is not None else exp_cfg["name"]
-    run_name = f"{exp_name}_seed{seed}_film-{resolved_film_mode}"
+    if args.test_vehicles is not None:
+        vehicle_tag = "_".join(test_vehicles) if len(test_vehicles) <= 2 else f"{len(test_vehicles)}cars"
+        run_name = f"{exp_name}_{vehicle_tag}_seed{seed}_film-{resolved_film_mode}"
+    else:
+        run_name = f"{exp_name}_seed{seed}_film-{resolved_film_mode}"
     exp_dir = PROJECT_ROOT / exp_cfg["output_root"] / run_name
     ckpt_dir = exp_dir / "checkpoints"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
@@ -406,7 +416,7 @@ def main():
     data_root = data_cfg.get("data_root", "")
     search_dir = os.path.join(data_root, data_cfg["train_data_dir"]) if data_cfg["train_data_dir"] else data_root
     all_files = collect_data_files(search_dir)
-    test_vehicles = args.test_vehicles if args.test_vehicles is not None else data_cfg.get("test_vehicles", ["JX65"])
+    # test_vehicles resolved above (before run_name construction)
     train_files, test_files = split_train_test(all_files, test_vehicles)
     print(f"Train files: {len(train_files)}  |  Test files: {len(test_files)}  (test vehicles: {test_vehicles})")
 
