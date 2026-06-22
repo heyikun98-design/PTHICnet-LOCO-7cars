@@ -19,20 +19,48 @@ from statistics import mean, stdev
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+# ---- Vehicle grouping (update for Phase 5 expanded data) ----
+# These lists are the Phase 3 frozen baseline. For Phase 5, edit below
+# or pass via CLI (future work).
 VEHICLES = ["C201", "EP32", "JX65", "CY02C", "M6", "S50EVK", "FX11"]
 NORMAL_CARS = ["C201", "EP32", "JX65", "S50EVK", "FX11"]
 HARD_CARS = ["CY02C", "M6"]
 
-# Directory naming patterns per architecture (glob-compatible)
+# Directory naming patterns per architecture.
+# Phase 3 naming:   pt_hicnet_loco_e3_fold3_CY02C_seed42_film-global
+# Phase 5 naming:   pt_hicnet_loco_e3_C201_seed42_film-global_md0.15
+# The glob catches both. Ablation prefixes (phase5_ablation_*) are NOT matched
+# to avoid mixing into main tables.
 ARCH_PATTERNS = {
-    "E0": "pt_hicnet_loco_e0_fold*",
-    "E1": "pt_hicnet_loco_e1_fold*",
-    "E2": "pt_hicnet_loco_e2_fold*",
-    "E3": "pt_hicnet_loco_fold*",
-    "E4": "pt_hicnet_loco_e4_fold*",
+    "E0": "pt_hicnet_loco_e0_*",
+    "E1": "pt_hicnet_loco_e1_*",
+    "E2": "pt_hicnet_loco_e2_*",
+    "E3": "pt_hicnet_loco_e3_*",
+    "E4": "pt_hicnet_loco_e4_*",
 }
 
 ALL_ARCHITECTURES = ["E0", "E1", "E2", "E3", "E4"]
+
+
+def _extract_vehicle(dirname):
+    """Extract vehicle code from LOCO directory name.
+
+    Handles both:
+      Phase 3:  pt_hicnet_loco_e3_fold3_CY02C_seed42_film-global
+                → vehicle after "fold{N}"
+      Phase 5:  pt_hicnet_loco_e3_C201_seed42_film-global_md0.15
+                → vehicle is token after arch prefix (e3/e2/e0)
+    """
+    parts = dirname.split("_")
+    # Phase 3: look for "foldN"
+    for i, p in enumerate(parts):
+        if p.startswith("fold") and i + 1 < len(parts):
+            return parts[i + 1]
+    # Phase 5: after "e0"/"e1"/"e2"/"e3"/"e4" prefix
+    for i, p in enumerate(parts):
+        if p.lower() in ("e0", "e1", "e2", "e3", "e4") and i + 1 < len(parts):
+            return parts[i + 1]
+    return "???"
 
 
 def find_history(results_root, pattern):
@@ -42,13 +70,7 @@ def find_history(results_root, pattern):
     for candidate in candidates:
         hist = candidate / "history.json"
         if hist.exists():
-            # Extract vehicle from directory name
-            parts = candidate.name.split("_")
-            vehicle = "???"
-            for i, p in enumerate(parts):
-                if p.startswith("fold") and i + 1 < len(parts):
-                    vehicle = parts[i + 1]
-                    break
+            vehicle = _extract_vehicle(candidate.name)
             results.append((vehicle, hist))
     return results
 

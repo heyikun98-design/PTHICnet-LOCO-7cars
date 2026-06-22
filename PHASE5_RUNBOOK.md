@@ -176,37 +176,57 @@ done
 --restore_best
 ```
 
-### 2.3 LOCO-CV 批量执行
+### 2.3 命名规则（防止目录冲突和聚合混淆）
 
-**E0/E1 使用 baseline 脚本**（`feather/train_reg_att_props_X70_feather.py`），不支持 `--film_mode`、`--patience`、`--restore_best`。单独写 loop。
+`train_pt_hicnet.py` 的 `run_name` 自动追加了 `vehicle_tag`（CLI 显式传 `--test_vehicles` 时）和 `_md{prob}`（`material_dropout_prob > 0` 时）。因此同 arch/seed/vehicle 但不同 dropout 的 run **不会**互相覆盖。
 
-**E0 loop（baseline 脚本）**:
+但 `aggregate_loco.py` 靠目录名前缀匹配架构。**P0 主实验必须用兼容前缀，P1/P2 ablation 必须用不同前缀。**
+
+| 优先级 | 架构 | `--exp_name` 前缀 | `--material_dropout_prob` | 实际目录名示例 |
+|------|------|------|:---:|------|
+| P0 | E0 | `pt_hicnet_loco_e0_{V}_seed{S}` | — | `pt_hicnet_loco_e0_C201_seed42` |
+| P0 | E2 | `pt_hicnet_loco_e2_{V}_seed{S}` | 0.15 | `pt_hicnet_loco_e2_C201_seed42_film-none_md0.15` |
+| P0 | E3 | `pt_hicnet_loco_e3_{V}_seed{S}` | 0.15 | `pt_hicnet_loco_e3_C201_seed42_film-global_md0.15` |
+| P1 | E3 | `phase5_ablation_e3_nodropout_{V}_seed{S}` | 0.0 | `phase5_ablation_e3_nodropout_C201_seed42_film-global` |
+| P2 | E2 | `phase5_ablation_e2_nodropout_{V}_seed{S}` | 0.0 | `phase5_ablation_e2_nodropout_C201_seed42_film-none` |
+
+### 2.4 LOCO-CV 批量执行
+
+**E0 loop（baseline 脚本）**：
+
+⚠️ E0 用 baseline 脚本，CLI 参数名完全不同。**先跑 `--help` 确认参数，再写 loop。**
+
+```bash
+python feather/train_reg_att_props_X70_feather.py --help
+# 确认参数: --seed, --exp_name, --batch_size, --epoch, --learning_rate
+```
 
 ```bash
 #!/bin/bash
 VEHICLES=(C201 EP32 JX65 CY02C M6 S50EVK FX11 NEW_CAR_A NEW_CAR_B)
 SEEDS=(42 3407 2026)
+FOLD=0
 
 for SEED in "${SEEDS[@]}"; do
   for V in "${VEHICLES[@]}"; do
+    EXP_NAME="pt_hicnet_loco_e0_${V}_seed${SEED}"
+    echo "=== E0 fold${FOLD} test=$V seed=$SEED ==="
     python -u feather/train_reg_att_props_X70_feather.py \
       --config configs/default.yaml \
       --seed $SEED \
-      --test_vehicles $V \
-      --val_split 0.15 \
-      --split_seed 2026 \
+      --exp_name $EXP_NAME \
       --batch_size 15 \
       2>&1 | tee experiments/phase5_logs/E0_seed${SEED}_${V}.log
+    FOLD=$((FOLD + 1))
   done
 done
 ```
 
-⚠️ **E0 baseline 脚本的 CLI 参数名可能与 train_pt_hicnet.py 不同**。如果 baseline 脚本不支持 `--test_vehicles`/`--val_split`/`--split_seed`/`--seed`，需要先确认其参数列表：
-```bash
-python feather/train_reg_att_props_X70_feather.py --help
-```
+⚠️ E0 baseline 脚本的 `--exp_name` 直接决定输出目录：`experiments/<exp_name>/`。如果集群 job array 同一分钟启动多个 fold 又不传 `--exp_name`，默认用分钟级 timestamp，同名碰撞风险很高。**必须显式传 `--exp_name`。**
 
-**E2 + E3 loop（PT 脚本）**:
+⚠️ E0 baseline 脚本**没有** `--test_vehicles`、`--val_split`、`--split_seed`。LOCO split 需要通过其他机制实现（数据 config 或预处理分离 train/test 文件）。**如果这一点没解决，先不要跑 E0 全量。**
+
+**E2 + E3 P0 loop（PT 脚本，material_dropout_prob=0.15）**:
 
 ```bash
 #!/bin/bash
@@ -215,17 +235,18 @@ SEEDS=(42 3407 2026)
 
 for ARCH in E2 E3; do
   if [ "$ARCH" = "E2" ]; then FILM="none"; else FILM="global"; fi
+  PREFIX="pt_hicnet_loco_${ARCH,,}"  # e2 or e3
   for SEED in "${SEEDS[@]}"; do
     for V in "${VEHICLES[@]}"; do
+      EXP_NAME="${PREFIX}_${V}_seed${SEED}"
       python -u scripts/train_pt_hicnet.py \
         --config configs/default.yaml \
         --seed $SEED \
+        --exp_name $EXP_NAME \
         --film_mode $FILM \
         --test_vehicles $V \
-        --val_split 0.15 \
-        --split_seed 2026 \
-        --patience 50 \
-        --restore_best \
+        --val_split 0.15 --split_seed 2026 \
+        --patience 50 --restore_best \
         --material_dropout_prob 0.15 \
         2>&1 | tee experiments/phase5_logs/${ARCH}_seed${SEED}_${V}.log
     done
@@ -236,19 +257,36 @@ done
 **P1 对照：E3 + material_dropout_prob=0.0（seed=42 only）**:
 
 ```bash
+PREFIX="phase5_ablation_e3_nodropout"
 for V in "${VEHICLES[@]}"; do
+  EXP_NAME="${PREFIX}_${V}_seed42"
   python -u scripts/train_pt_hicnet.py \
     --config configs/default.yaml \
-    --seed 42 \
-    --film_mode global \
-    --test_vehicles $V \
+    --seed 42 --exp_name $EXP_NAME \
+    --film_mode global --test_vehicles $V \
     --val_split 0.15 --split_seed 2026 --patience 50 --restore_best \
     --material_dropout_prob 0.0 \
     2>&1 | tee experiments/phase5_logs/E3_nodropout_seed42_${V}.log
 done
 ```
 
-**P2 建议（如有 GPU 余量）：E2 + material_dropout_prob=0.0，seed=42，全车型。** E2−E0 的提升会混有 "PT backbone" + "material regularization" 两个因素。不加这个对照，无法分离各自贡献。
+**P2 建议：E2 + material_dropout_prob=0.0（seed=42 only）**:
+
+```bash
+PREFIX="phase5_ablation_e2_nodropout"
+for V in "${VEHICLES[@]}"; do
+  EXP_NAME="${PREFIX}_${V}_seed42"
+  python -u scripts/train_pt_hicnet.py \
+    --config configs/default.yaml \
+    --seed 42 --exp_name $EXP_NAME \
+    --film_mode none --test_vehicles $V \
+    --val_split 0.15 --split_seed 2026 --patience 50 --restore_best \
+    --material_dropout_prob 0.0 \
+    2>&1 | tee experiments/phase5_logs/E2_nodropout_seed42_${V}.log
+done
+```
+
+**说明**：E2−E0 的提升混有 "PT backbone" 和 "material regularization" 两个因素。P2 对照可将二者分离。
 
 ### 2.4 集群执行策略
 

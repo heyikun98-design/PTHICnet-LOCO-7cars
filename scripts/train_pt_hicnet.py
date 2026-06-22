@@ -349,6 +349,11 @@ def main():
         run_name = f"{exp_name}_{vehicle_tag}_seed{seed}_film-{resolved_film_mode}"
     else:
         run_name = f"{exp_name}_seed{seed}_film-{resolved_film_mode}"
+    # Disambiguate material augmentation variants to prevent P0/P1 collision
+    if material_dropout_prob > 0:
+        run_name += f"_md{material_dropout_prob:g}"
+    if material_jitter_std > 0:
+        run_name += f"_mj{material_jitter_std:g}"
     exp_dir = PROJECT_ROOT / exp_cfg["output_root"] / run_name
     ckpt_dir = exp_dir / "checkpoints"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
