@@ -27,26 +27,29 @@ NORMAL_CARS = ["C201", "EP32", "JX65", "S50EVK", "FX11"]
 HARD_CARS = ["CY02C", "M6"]
 
 # Directory naming patterns per architecture.
-# Phase 3 naming:   pt_hicnet_loco_e3_fold3_CY02C_seed42_film-global
+# Phase 3 E3 naming: pt_hicnet_loco_fold3_CY02C_seed42_film-global
 # Phase 5 naming:   pt_hicnet_loco_e3_C201_seed42_film-global_md0.15
-# The glob catches both. Ablation prefixes (phase5_ablation_*) are NOT matched
-# to avoid mixing into main tables.
+# The E3 list catches both legacy Phase 3 and Phase 5 names. Ablation prefixes
+# are kept out of main tables by using a separate --results_root.
 ARCH_PATTERNS = {
     "E0": "pt_hicnet_loco_e0_*",
     "E1": "pt_hicnet_loco_e1_*",
     "E2": "pt_hicnet_loco_e2_*",
-    "E3": "pt_hicnet_loco_e3_*",
+    "E3": ["pt_hicnet_loco_e3_*", "pt_hicnet_loco_fold*"],
     "E4": "pt_hicnet_loco_e4_*",
 }
 
 ALL_ARCHITECTURES = ["E0", "E1", "E2", "E3", "E4"]
+EXCLUDED_MAIN_PREFIXES = (
+    "pt_hicnet_loco_e3_matdrop",
+)
 
 
 def _extract_vehicle(dirname):
     """Extract vehicle code from LOCO directory name.
 
     Handles both:
-      Phase 3:  pt_hicnet_loco_e3_fold3_CY02C_seed42_film-global
+      Phase 3:  pt_hicnet_loco_fold3_CY02C_seed42_film-global
                 → vehicle after "fold{N}"
       Phase 5:  pt_hicnet_loco_e3_C201_seed42_film-global_md0.15
                 → vehicle is token after arch prefix (e3/e2/e0)
@@ -63,9 +66,20 @@ def _extract_vehicle(dirname):
     return "???"
 
 
-def find_history(results_root, pattern):
-    """Locate history.json files matching a glob pattern."""
-    candidates = sorted(Path(results_root).glob(pattern))
+def find_history(results_root, patterns):
+    """Locate history.json files matching one or more glob patterns."""
+    if isinstance(patterns, str):
+        patterns = [patterns]
+    candidates = []
+    seen = set()
+    for pattern in patterns:
+        for candidate in sorted(Path(results_root).glob(pattern)):
+            if any(candidate.name.startswith(prefix) for prefix in EXCLUDED_MAIN_PREFIXES):
+                continue
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            candidates.append(candidate)
     results = []
     for candidate in candidates:
         hist = candidate / "history.json"
