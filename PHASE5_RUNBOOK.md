@@ -108,49 +108,43 @@ python scripts/qa_new_data.py \
 
 ### 2.0 Cluster Preflight（跑全量之前必做）
 
-在开 100+ folds 之前，先跑一个最小闭环验证链路：
+在开 100+ folds 之前，先跑一个最小闭环验证链路。
 
 ```bash
 # 选 1 辆 old normal + 1 辆 hard/new（共 2 folds）
-PREFLIGHT_VEHICLES=(JX65 CY02C)  # 或替换为新车中代表硬车的那个
-ARCHS=(E0 E2 E3)
-SEED=42
+PREFLIGHT_VEHICLES=(JX65 CY02C)
 
-for V in "${PREFLIGHT_VEHICLES[@]}"; do
-  # E0: baseline 脚本（参数名不同，见下方 2.2 E0 独立 loop）
-  python feather/train_reg_att_props_X70_feather.py \
-    --config configs/default.yaml \
-    --test_vehicles $V \
-    --seed $SEED \
-    ...  # 见 2.2 完整命令
+# E2
+python -u scripts/train_pt_hicnet.py \
+  --config configs/default.yaml \
+  --seed 42 \
+  --exp_name phase5_p0/pt_hicnet_loco_e2 \
+  --film_mode none --test_vehicles JX65 \
+  --val_split 0.15 --split_seed 2026 --patience 50 --restore_best \
+  --material_dropout_prob 0.15
 
-  # E2/E3: PT 脚本
-  python scripts/train_pt_hicnet.py \
-    --config configs/default.yaml \
-    --test_vehicles $V \
-    --seed $SEED \
-    --film_mode none \   # E2
-    --material_dropout_prob 0.15 \
-    --val_split 0.15 --patience 50 --restore_best
+# E3
+python -u scripts/train_pt_hicnet.py \
+  --config configs/default.yaml \
+  --seed 42 \
+  --exp_name phase5_p0/pt_hicnet_loco_e3 \
+  --film_mode global --test_vehicles JX65 \
+  --val_split 0.15 --split_seed 2026 --patience 50 --restore_best \
+  --material_dropout_prob 0.15
 
-  python scripts/train_pt_hicnet.py \
-    --config configs/default.yaml \
-    --test_vehicles $V \
-    --seed $SEED \
-    --film_mode global \   # E3
-    --material_dropout_prob 0.15 \
-    --val_split 0.15 --patience 50 --restore_best
-done
+# ... 再跑 CY02C 的 E2/E3，加 E0
 ```
 
-**Preflight 通过的 4 个条件：**
+**Preflight 通过的 5 个条件**：
 
-1. 每个 (arch, vehicle) 组合落在独立目录，**不互相覆盖**（检查 `experiments/` 下生成了 6 个不同目录名）
-2. 每个 `history.json` 有完整的 `val_accuracy` / `test_accuracy` 字段
-3. `aggregate_loco.py` 能读到这些 fold 并产出 per-vehicle 表
-4. E3+matdrop test acc 不出明显异常（vs Phase 4 frozen baseline: JX65 ~78%, CY02C ~62%）
+1. 每个 (arch, vehicle) 组合落在 `experiments/phase5_p0/` 下的独立子目录，**不互相覆盖**
+2. 目录名含 vehicle + seed + film_mode + `_md0.15`（验证代码自动追加正确）
+3. 每个 `history.json` 有完整的 `val_accuracy` / `test_accuracy` 字段
+4. `aggregate_loco.py --results_root experiments/phase5_p0` 能读到这些 fold 并产出 per-vehicle 表
+5. 旧 Phase 3 目录、单折 pilot（`pt_hicnet_loco_e3_matdrop015_*`）**不出现在主表中**（验证隔离有效）
+6. E3+matdrop test acc 不出明显异常（vs Phase 4 frozen baseline: JX65 ~78%, CY02C ~62%）
 
-**只有这个闭环全绿了，才开 2.3 的批量 LOCO-CV。**
+**只有这个闭环全绿了，才开 2.5 的批量 LOCO-CV。**
 
 ### 2.1 总览
 
@@ -176,21 +170,50 @@ done
 --restore_best
 ```
 
-### 2.3 命名规则（防止目录冲突和聚合混淆）
+### 2.3 目录隔离规则（防止结果污染）
 
-`train_pt_hicnet.py` 的 `run_name` 自动追加了 `vehicle_tag`（CLI 显式传 `--test_vehicles` 时）和 `_md{prob}`（`material_dropout_prob > 0` 时）。因此同 arch/seed/vehicle 但不同 dropout 的 run **不会**互相覆盖。
+**P0 和 P1/P2 使用不同的 experiments 子目录，物理隔离。**
 
-但 `aggregate_loco.py` 靠目录名前缀匹配架构。**P0 主实验必须用兼容前缀，P1/P2 ablation 必须用不同前缀。**
+```bash
+experiments/
+├── phase5_p0/          # P0 主实验（aggregate 只扫这个）
+├── phase5_ablation/    # P1/P2 no-dropout 对照（单独分析）
+├── phase5_logs/        # 训练日志
+├── phase5_qa/          # QA 报告
+└── ...                 # 旧 Phase 3 目录（aggregate 不再扫描）
+```
 
-| 优先级 | 架构 | `--exp_name` 前缀 | `--material_dropout_prob` | 实际目录名示例 |
-|------|------|------|:---:|------|
-| P0 | E0 | `pt_hicnet_loco_e0_{V}_seed{S}` | — | `pt_hicnet_loco_e0_C201_seed42` |
-| P0 | E2 | `pt_hicnet_loco_e2_{V}_seed{S}` | 0.15 | `pt_hicnet_loco_e2_C201_seed42_film-none_md0.15` |
-| P0 | E3 | `pt_hicnet_loco_e3_{V}_seed{S}` | 0.15 | `pt_hicnet_loco_e3_C201_seed42_film-global_md0.15` |
-| P1 | E3 | `phase5_ablation_e3_nodropout_{V}_seed{S}` | 0.0 | `phase5_ablation_e3_nodropout_C201_seed42_film-global` |
-| P2 | E2 | `phase5_ablation_e2_nodropout_{V}_seed{S}` | 0.0 | `phase5_ablation_e2_nodropout_C201_seed42_film-none` |
+**聚合命令**：
 
-### 2.4 LOCO-CV 批量执行
+```bash
+python scripts/aggregate_loco.py \
+  --architectures E0 E2 E3 \
+  --results_root experiments/phase5_p0
+```
+
+这确保旧 Phase 3 目录、单折 pilot（`pt_hicnet_loco_e3_matdrop015_*`）、P1/P2 ablation 都不会混进 P0 主表。
+
+### 2.4 命名规则
+
+`train_pt_hicnet.py` 的 `run_name` **自动追加** `vehicle_tag`（CLI 显式传 `--test_vehicles` 时）和 `_md{prob}`（`material_dropout_prob > 0` 时）。因此 `--exp_name` **不需要**包含 vehicle/seed——代码会补。
+
+E0 baseline 脚本**不会**自动追加，所以 E0 的 `--exp_name` 必须显式包含 vehicle/seed。
+
+| 优先级 | 架构 | `--exp_name` | 代码自动追加 | 最终目录 |
+|------|------|------|------|------|
+| P0 | E0 | `phase5_p0/pt_hicnet_loco_e0_C201_seed42` | — | `phase5_p0/pt_hicnet_loco_e0_C201_seed42` |
+| P0 | E2 | `phase5_p0/pt_hicnet_loco_e2` | `_C201_seed42_film-none_md0.15` | `phase5_p0/pt_hicnet_loco_e2_C201_seed42_film-none_md0.15` |
+| P0 | E3 | `phase5_p0/pt_hicnet_loco_e3` | `_C201_seed42_film-global_md0.15` | `phase5_p0/pt_hicnet_loco_e3_C201_seed42_film-global_md0.15` |
+| P1 | E3 | `phase5_ablation/pt_hicnet_loco_e3` | `_C201_seed42_film-global` | `phase5_ablation/pt_hicnet_loco_e3_C201_seed42_film-global` |
+| P2 | E2 | `phase5_ablation/pt_hicnet_loco_e2` | `_C201_seed42_film-none` | `phase5_ablation/pt_hicnet_loco_e2_C201_seed42_film-none` |
+
+**关键规则**：
+- P0 的 `--exp_name` 以 `phase5_p0/` 开头 → 落进独立子目录
+- PT 脚本 (E2/E3) 的 `--exp_name` 不含 vehicle/seed → 代码自动补
+- E0 baseline 的 `--exp_name` 必须含 vehicle/seed → baseline 不自动补
+- P1/P2 的 `--exp_name` 以 `phase5_ablation/` 开头 → 不匹配 aggregate 主表
+
+### 2.5 LOCO-CV 批量执行
 
 **E0 loop（baseline 脚本）**：
 
@@ -198,35 +221,35 @@ done
 
 ```bash
 python feather/train_reg_att_props_X70_feather.py --help
-# 确认参数: --seed, --exp_name, --batch_size, --epoch, --learning_rate
+# 确认: --seed, --exp_name, --batch_size, --epoch, --learning_rate
 ```
+
+E0 baseline 的 `--exp_name` 直接决定输出目录 (`experiments/<exp_name>/`)，且**不会**自动追加 vehicle/seed。必须显式写全。
 
 ```bash
 #!/bin/bash
 VEHICLES=(C201 EP32 JX65 CY02C M6 S50EVK FX11 NEW_CAR_A NEW_CAR_B)
 SEEDS=(42 3407 2026)
-FOLD=0
 
 for SEED in "${SEEDS[@]}"; do
   for V in "${VEHICLES[@]}"; do
-    EXP_NAME="pt_hicnet_loco_e0_${V}_seed${SEED}"
-    echo "=== E0 fold${FOLD} test=$V seed=$SEED ==="
+    EXP_NAME="phase5_p0/pt_hicnet_loco_e0_${V}_seed${SEED}"
+    echo "=== E0 test=$V seed=$SEED ==="
     python -u feather/train_reg_att_props_X70_feather.py \
       --config configs/default.yaml \
       --seed $SEED \
       --exp_name $EXP_NAME \
       --batch_size 15 \
       2>&1 | tee experiments/phase5_logs/E0_seed${SEED}_${V}.log
-    FOLD=$((FOLD + 1))
   done
 done
 ```
 
-⚠️ E0 baseline 脚本的 `--exp_name` 直接决定输出目录：`experiments/<exp_name>/`。如果集群 job array 同一分钟启动多个 fold 又不传 `--exp_name`，默认用分钟级 timestamp，同名碰撞风险很高。**必须显式传 `--exp_name`。**
-
 ⚠️ E0 baseline 脚本**没有** `--test_vehicles`、`--val_split`、`--split_seed`。LOCO split 需要通过其他机制实现（数据 config 或预处理分离 train/test 文件）。**如果这一点没解决，先不要跑 E0 全量。**
 
 **E2 + E3 P0 loop（PT 脚本，material_dropout_prob=0.15）**:
+
+PT 脚本自动追加 vehicle/seed/dropout → `--exp_name` 不需要含 `${V}_seed${SEED}`。
 
 ```bash
 #!/bin/bash
@@ -235,14 +258,13 @@ SEEDS=(42 3407 2026)
 
 for ARCH in E2 E3; do
   if [ "$ARCH" = "E2" ]; then FILM="none"; else FILM="global"; fi
-  PREFIX="pt_hicnet_loco_${ARCH,,}"  # e2 or e3
+  EXP_PREFIX="phase5_p0/pt_hicnet_loco_${ARCH,,}"  # e2 or e3
   for SEED in "${SEEDS[@]}"; do
     for V in "${VEHICLES[@]}"; do
-      EXP_NAME="${PREFIX}_${V}_seed${SEED}"
       python -u scripts/train_pt_hicnet.py \
         --config configs/default.yaml \
         --seed $SEED \
-        --exp_name $EXP_NAME \
+        --exp_name $EXP_PREFIX \
         --film_mode $FILM \
         --test_vehicles $V \
         --val_split 0.15 --split_seed 2026 \
@@ -254,15 +276,16 @@ for ARCH in E2 E3; do
 done
 ```
 
+实际目录示例：`experiments/phase5_p0/pt_hicnet_loco_e3_C201_seed42_film-global_md0.15`
+
 **P1 对照：E3 + material_dropout_prob=0.0（seed=42 only）**:
 
 ```bash
-PREFIX="phase5_ablation_e3_nodropout"
 for V in "${VEHICLES[@]}"; do
-  EXP_NAME="${PREFIX}_${V}_seed42"
   python -u scripts/train_pt_hicnet.py \
     --config configs/default.yaml \
-    --seed 42 --exp_name $EXP_NAME \
+    --seed 42 \
+    --exp_name phase5_ablation/pt_hicnet_loco_e3 \
     --film_mode global --test_vehicles $V \
     --val_split 0.15 --split_seed 2026 --patience 50 --restore_best \
     --material_dropout_prob 0.0 \
@@ -273,12 +296,11 @@ done
 **P2 建议：E2 + material_dropout_prob=0.0（seed=42 only）**:
 
 ```bash
-PREFIX="phase5_ablation_e2_nodropout"
 for V in "${VEHICLES[@]}"; do
-  EXP_NAME="${PREFIX}_${V}_seed42"
   python -u scripts/train_pt_hicnet.py \
     --config configs/default.yaml \
-    --seed 42 --exp_name $EXP_NAME \
+    --seed 42 \
+    --exp_name phase5_ablation/pt_hicnet_loco_e2 \
     --film_mode none --test_vehicles $V \
     --val_split 0.15 --split_seed 2026 --patience 50 --restore_best \
     --material_dropout_prob 0.0 \
@@ -286,7 +308,7 @@ for V in "${VEHICLES[@]}"; do
 done
 ```
 
-**说明**：E2−E0 的提升混有 "PT backbone" 和 "material regularization" 两个因素。P2 对照可将二者分离。
+**P2 的意义**：E2−E0 的提升混有 "PT backbone" 和 "material regularization" 两个因素。P2 对照可将二者分离。
 
 ### 2.4 集群执行策略
 
@@ -324,30 +346,37 @@ Smoke test 通过后再启动全量 LOCO-CV。
 
 ## 3. 结果聚合
 
-所有 fold 跑完后，用 `aggregate_loco.py` 出表：
+所有 fold 跑完后，只扫 P0 子目录：
 
 ```bash
 python scripts/aggregate_loco.py \
   --architectures E0 E2 E3 \
-  --results_root experiments
+  --results_root experiments/phase5_p0
 ```
 
-⚠️ **当前 `aggregate_loco.py` 硬编码了 7 车列表和 normal/hard 分组**（`VEHICLES`, `NORMAL_CARS`, `HARD_CARS` 在脚本顶部）。Phase 5 新增车型后，需要修改这三行：
+⚠️ **`aggregate_loco.py` 硬编码了 7 车列表和 normal/hard 分组**（`VEHICLES`, `NORMAL_CARS`, `HARD_CARS` 在脚本顶部）。Phase 5 新增车型后需修改这三行：
 
 ```python
 VEHICLES = ["C201", "EP32", "JX65", "CY02C", "M6", "S50EVK", "FX11",
-            "NEW_CAR_A", "NEW_CAR_B"]  # 添加新车
-NORMAL_CARS = ["C201", "EP32", "JX65", "S50EVK", "FX11", "NEW_CAR_A"]  # 按 QA 分组
-HARD_CARS = ["CY02C", "M6", "NEW_CAR_B"]  # 按 QA 分组
+            "NEW_CAR_A", "NEW_CAR_B"]
+NORMAL_CARS = [...]  # 按 QA 结果分组
+HARD_CARS = [...]    # 按 QA 结果分组
 ```
 
-如果新车型多、分组不确定，先改成从命令行或配置文件读取，避免每次改代码。
-
-**注意 `aggregate_loco.py` 目前只在 stdout 打印表格，不写入文件。** 用 `tee` 保存：
+P1/P2 ablation 需要单独聚合（可选，不同 `--results_root`）：
 
 ```bash
-python scripts/aggregate_loco.py --architectures E0 E2 E3 --results_root experiments \
-  2>&1 | tee experiments/phase5_aggregate.txt
+python scripts/aggregate_loco.py \
+  --architectures E2 E3 \
+  --results_root experiments/phase5_ablation
+```
+
+**注意 `aggregate_loco.py` 目前只在 stdout 打印，不写文件。** 用 `tee` 保存：
+
+```bash
+python scripts/aggregate_loco.py --architectures E0 E2 E3 \
+  --results_root experiments/phase5_p0 \
+  2>&1 | tee experiments/phase5_aggregate_p0.txt
 ```
 
 ---
