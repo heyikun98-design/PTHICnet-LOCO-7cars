@@ -70,6 +70,17 @@ def load_config(config_path):
         return yaml.safe_load(f)
 
 
+def _set_datasets_eval_deterministic(loader, flag):
+    """Toggle eval_deterministic on all underlying HICDataLoader datasets."""
+    ds = loader.dataset
+    if hasattr(ds, 'datasets'):  # ConcatDataset
+        for d in ds.datasets:
+            if hasattr(d, 'eval_deterministic'):
+                d.eval_deterministic = flag
+    elif hasattr(ds, 'eval_deterministic'):
+        ds.eval_deterministic = flag
+
+
 def set_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
@@ -162,7 +173,8 @@ def split_train_test(all_files, test_vehicles):
     return train_files, test_files
 
 
-def build_loader(files, args_ns, batch_size, num_workers, early_fusion, normalize_thickness, shuffle):
+def build_loader(files, args_ns, batch_size, num_workers, early_fusion, normalize_thickness, shuffle,
+                 eval_deterministic=False):
     from data_utils.HICLoader_feather import HICDataLoader
 
     datasets = [
@@ -171,6 +183,7 @@ def build_loader(files, args_ns, batch_size, num_workers, early_fusion, normaliz
             args=args_ns,
             early_fusion=early_fusion,
             normalize_thickness=normalize_thickness,
+            eval_deterministic=eval_deterministic,
         )
         for fp in files
     ]
@@ -429,13 +442,13 @@ def main():
         train_files, runtime_args,
         int(train_cfg["batch_size"]), int(train_cfg["num_workers"]),
         early_fusion=True, normalize_thickness=bool(data_cfg.get("normalize_thickness", True)),
-        shuffle=True,
+        shuffle=True, eval_deterministic=False,  # stochastic = data augmentation
     )
     test_loader = build_loader(
         test_files, runtime_args,
         int(train_cfg["batch_size"]), int(train_cfg["num_workers"]),
         early_fusion=True, normalize_thickness=bool(data_cfg.get("normalize_thickness", True)),
-        shuffle=False,
+        shuffle=False, eval_deterministic=True,  # fixed sampling = reproducible metrics
     )
 
     # --- Build validation split from training data (stratified by age_group + HIC bucket) ---
@@ -562,6 +575,8 @@ def main():
     history = []
     for epoch in range(int(train_cfg["epoch"])):
         model.train()
+        # Restore stochastic point sampling for training (data augmentation)
+        _set_datasets_eval_deterministic(train_loader, False)
         train_losses = []
         feat_norms = []
         for fused_input, hic_point, _, age_group, target in train_loader:
@@ -605,6 +620,10 @@ def main():
         scheduler.step()
 
         model.eval()
+        # Enable deterministic point sampling for reproducible eval metrics
+        _set_datasets_eval_deterministic(test_loader, True)
+        if val_loader is not None:
+            _set_datasets_eval_deterministic(val_loader, True)
         # --- Evaluate on val (for early stopping) if val_loader exists ---
         monitor_loader = val_loader if val_loader is not None else test_loader
         monitor_name = "val" if val_loader is not None else "test"

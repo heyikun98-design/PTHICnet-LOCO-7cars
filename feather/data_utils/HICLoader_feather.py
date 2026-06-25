@@ -374,7 +374,8 @@ def _safe_float(v, default=0.0):
 
 # ===================== 数据集 =====================
 class HICDataLoader(Dataset):
-    def __init__(self, root, args, process_data=False, early_fusion=True, normalize_thickness=True):
+    def __init__(self, root, args, process_data=False, early_fusion=True, normalize_thickness=True,
+                 eval_deterministic=False):
         self.root = root
         self.args = args
         self.npoints = args.num_point
@@ -383,6 +384,7 @@ class HICDataLoader(Dataset):
         self.use_normals = args.use_normals
         self.early_fusion = early_fusion
         self.normalize_thickness = normalize_thickness
+        self.eval_deterministic = eval_deterministic
 
         # 车辆识别
         self.vehicle_name = extract_vehicle_identifier(root)
@@ -699,6 +701,14 @@ class HICDataLoader(Dataset):
         if N <= 0:
             raise ValueError(f"Invalid point count ({N}) for sample {index} in {self.root}")
 
+        # Deterministic eval: use per-sample seeded RNG so repeated evaluation
+        # of the same sample always samples the same 8192 points.
+        # Training: use global numpy RNG (stochastic = data augmentation).
+        if self.eval_deterministic:
+            rng = np.random.RandomState(index * 100003 + 0)
+        else:
+            rng = np.random
+
         if N >= self.npoints:
             # 足够点：不放回采样或 FPS
             if self.uniform:
@@ -706,12 +716,12 @@ class HICDataLoader(Dataset):
                     indices = farthest_point_sample_improved(point_set, self.npoints)
                 except Exception:
                     # FPS 可能出错时降级为随机无放回采样
-                    indices = np.random.choice(N, self.npoints, replace=False)
+                    indices = rng.choice(N, self.npoints, replace=False)
             else:
-                indices = np.random.choice(N, self.npoints, replace=False)
+                indices = rng.choice(N, self.npoints, replace=False)
         else:
             # 点不足：有放回随机采样补齐
-            indices = np.random.choice(N, self.npoints, replace=True)
+            indices = rng.choice(N, self.npoints, replace=True)
 
         # 安全转换并避免越界（保险）
         indices = np.array(indices, dtype=np.int64)

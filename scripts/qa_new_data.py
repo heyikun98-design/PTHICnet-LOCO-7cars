@@ -26,6 +26,8 @@ from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
+import pyarrow.feather as feather
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -53,6 +55,21 @@ def parse_args():
     return p.parse_args()
 
 
+# ---- vehicle extraction (mirrors HICLoader_feather) ----
+try:
+    from data_utils.HICLoader_feather import CAR_TO_VEHICLE
+except ImportError:
+    CAR_TO_VEHICLE = {}
+
+
+def extract_vehicle_identifier(file_path):
+    """从文件路径提取车辆标识符。"""
+    parent_folder = os.path.basename(os.path.dirname(file_path))
+    if parent_folder.lower() in CAR_TO_VEHICLE:
+        return CAR_TO_VEHICLE[parent_folder.lower()]
+    return parent_folder
+
+
 def collect_feather_files(data_dir):
     """递归收集所有 .feather 文件，按 car 目录分组。"""
     car_files = defaultdict(list)
@@ -66,55 +83,114 @@ def collect_feather_files(data_dir):
     return dict(sorted(car_files.items()))
 
 
-def extract_car_name(car_dir):
-    """从 car 目录名解析车型代码。"""
-    from data_utils.HICLoader_feather import CAR_TO_VEHICLE
-    key = car_dir.lower()
-    if key in CAR_TO_VEHICLE:
-        return CAR_TO_VEHICLE[key]
-    return car_dir
+# ---- data loading (matches real nested feather format) ----
+def _safe_float(val, default=0.0):
+    """安全转换为浮点数（兼容字符串和 None）。"""
+    if val is None:
+        return default
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return default
 
 
-def load_feather_sample(fp):
-    """加载单个 feather 文件，返回 (points, hic, age)。"""
-    # 先尝试从路径获取 vehicle code，再导入 HICLoader
+def load_feather_samples(fp):
+    """加载一个 feather 文件，返回样本列表。
+
+    真实格式: file_id (str) + data (struct{hic_point, nearby_nodes})
+    """
+    samples = []
     try:
-        from data_utils.HICLoader_feather import (
-            HICDatasetFeather, HICLoaderFeather, extract_vehicle_identifier,
-        )
-    except ImportError:
-        print("[WARN] Cannot import HICLoader — trying pyarrow directly")
-        import pyarrow.feather as feather
-        df = feather.read_feather(fp)
-        pts_cols = ["x", "y", "z", "thickness"] + MAT_KEYS
-        pts = df[pts_cols].values.astype(np.float32) if all(c in df.columns for c in pts_cols) else None
-        hic_col = "hic" if "hic" in df.columns else ("HIC" if "HIC" in df.columns else None)
-        hic = float(df[hic_col].iloc[0]) if hic_col else 0.0
-        return pts, hic, None, df
-    try:
-        vehicle = extract_vehicle_identifier(fp)
-        loader = HICLoaderFeather(
-            [fp], vehicle, max_points=8192, train=True, use_normals=False,
-            normalize_params_path=str(PROJECT_ROOT / "feather" / "normalization_params.pkl"),
-            material_lookup_path=str(PROJECT_ROOT / "feather" / "material_lookup_by_vehicle.pkl"),
-        )
-        dataset = HICDatasetFeather([fp], vehicle, loader, is_train=False)
-        if len(dataset) == 0:
-            return None, 0.0, None, None
-        item = dataset[0]
-        pts = item.get("fused_input")  # [N,19] or [N,22]
-        if pts is None:
-            pts = item.get("points")
-        hic = float(item.get("hic", item.get("target", 0)))
-        age = item.get("age", item.get("age_group", None))
-        return pts, hic, age, item
+        df = pd.read_feather(fp)
     except Exception as e:
-        print(f"  [WARN] Failed to load {fp}: {e}")
-        return None, 0.0, None, None
+        print(f"  [WARN] Failed to read {fp}: {e}")
+        return samples
+
+    for _, row in df.iterrows():
+        file_id = str(row["file_id"])
+        point_data = row["data"]
+
+        # hic_point
+        hic_point = point_data.get("hic_point", {})
+        hic_raw = hic_point.get("HIC", hic_point.get("hic_value", None))
+        if hic_raw in (None, ""):
+            continue
+        hic_value = _safe_float(hic_raw)
+        if hic_value == 0:
+            continue  # HIC=0 is invalid
+
+        age_group = hic_point.get("age_group", "Adult")
+        age_code = 1 if str(age_group).lower().startswith("adult") else 0
+
+        # nearby_nodes → bbox + material vectors
+        nearby = point_data.get("nearby_nodes", [])
+        xyz_list = []
+        mat_sigs = set()
+
+        has_direct_mat = False
+        if len(nearby) > 0:
+            first = nearby[0]
+            has_direct_mat = all(k in first for k in ["密度RO", "杨氏模量E", "泊松比PR"])
+
+        for node in nearby:
+            x = _safe_float(node.get("X", 0))
+            y = _safe_float(node.get("Y", 0))
+            z = _safe_float(node.get("Z", 0))
+            xyz_list.append([x, y, z])
+
+            if has_direct_mat:
+                mat_vec = [
+                    _safe_float(node.get("密度RO", 0) or node.get("密度R0", 0)),
+                    _safe_float(node.get("杨氏模量E", 0)),
+                    _safe_float(node.get("泊松比PR", 0)),
+                    _safe_float(node.get("0.001应力应变曲线0", 0) or node.get("0.001应力应变曲线_0", 0)),
+                    _safe_float(node.get("0.001应力应变曲线0.05", 0) or node.get("0.001应力应变曲线_0.05", 0)),
+                    _safe_float(node.get("0.001应力应变曲线0.1", 0) or node.get("0.001应力应变曲线_0.1", 0)),
+                    _safe_float(node.get("0.001应力应变曲线0.15", 0) or node.get("0.001应力应变曲线_0.15", 0)),
+                    _safe_float(node.get("0.001应力应变曲线0.2", 0) or node.get("0.001应力应变曲线_0.2", 0)),
+                    _safe_float(node.get("0.001应力应变曲线0.5", 0) or node.get("0.001应力应变曲线_0.5", 0)),
+                    _safe_float(node.get("1应力应变曲线0", 0) or node.get("1应力应变曲线_0", 0)),
+                    _safe_float(node.get("1应力应变曲线0.05", 0) or node.get("1应力应变曲线_0.05", 0)),
+                    _safe_float(node.get("1应力应变曲线0.1", 0) or node.get("1应力应变曲线_0.1", 0)),
+                    _safe_float(node.get("1应力应变曲线0.15", 0) or node.get("1应力应变曲线_0.15", 0)),
+                    _safe_float(node.get("1应力应变曲线0.2", 0) or node.get("1应力应变曲线_0.2", 0)),
+                    _safe_float(node.get("1应力应变曲线0.5", 0) or node.get("1应力应变曲线_0.5", 0)),
+                ]
+            else:
+                # MID-based: skip material for now (need lookup table)
+                mat_vec = None
+
+            if mat_vec is not None:
+                mat_sigs.add(tuple(round(v, 6) for v in mat_vec))
+
+        if len(xyz_list) == 0:
+            continue
+
+        xyz = np.array(xyz_list, dtype=np.float32)
+        pmin = xyz.min(axis=0)
+        pmax = xyz.max(axis=0)
+        span = pmax - pmin
+        bbox = {
+            "diag": float(np.sqrt(np.sum(span ** 2))),
+            "x": float(span[0]),
+            "y": float(span[1]),
+            "z": float(span[2]),
+        }
+
+        samples.append({
+            "file_id": file_id,
+            "hic": hic_value,
+            "age_code": age_code,
+            "bbox": bbox,
+            "xyz": xyz,
+            "mat_sigs": mat_sigs,
+        })
+
+    return samples
 
 
 def bbox_stats(points_xyz):
-    """points_xyz: [N, 3] — 返回 bbox 对角线和各轴跨度。"""
+    """points_xyz: [N, 3] — 返回 bbox 对角线。"""
     if points_xyz is None or len(points_xyz) == 0:
         return {"diag": 0, "x": 0, "y": 0, "z": 0}
     pmin = points_xyz.min(axis=0)
@@ -126,101 +202,75 @@ def bbox_stats(points_xyz):
     }
 
 
-def material_vec_signature(material_row, decimals=6):
-    """将 15 维材料向量四舍五入为字符串签名。"""
-    return tuple(round(float(v), decimals) for v in material_row)
-
-
-# ---- 主诊断流程 ----
-
+# ---- main diagnostics ----
 def run_diagnostics(car_files, old_normal_set):
-    """对每辆车做 QA 诊断。"""
     rows = []
-    old_normal_material_vecs = set()
-    all_material_vecs = defaultdict(set)  # vehicle -> set of vec sigs
+    all_material_vecs = defaultdict(set)
 
     for car_dir, files in sorted(car_files.items()):
-        vehicle = extract_car_name(car_dir)
+        vehicle = extract_vehicle_identifier(files[0]) if files else car_dir
         print(f"\n--- {vehicle} ({car_dir}): {len(files)} files ---")
 
-        hics = []
-        ages = []
-        bboxes_sample = []
-        all_xyz = []
-        total_samples = 0
+        all_hics = []
+        adult_count = 0
+        child_count = 0
         hic_zero_count = 0
+        all_bboxes_sample = []
+        all_xyz_list = []
+        total_samples = 0
 
         for fp in files:
-            pts, hic, age, _ = load_feather_sample(fp)
-            if pts is None:
-                continue
-            total_samples += 1
-            if hic == 0:
-                hic_zero_count += 1
-            hics.append(hic)
-            if age is not None:
-                ages.append(age)
+            samples = load_feather_samples(fp)
+            for s in samples:
+                total_samples += 1
+                all_hics.append(s["hic"])
+                if s["age_code"] == 1:
+                    adult_count += 1
+                else:
+                    child_count += 1
+                all_bboxes_sample.append(s["bbox"])
+                all_xyz_list.append(s["xyz"])
+                all_material_vecs[vehicle] |= s["mat_sigs"]
 
-            # bbox
-            xyz = pts[:, :3] if pts.shape[1] >= 3 else pts[:, :3]
-            bbox = bbox_stats(xyz)
-            bboxes_sample.append(bbox)
-            all_xyz.append(xyz)
-
-            # material vectors (unique per sample)
-            if pts.shape[1] >= 19:
-                mat_data = pts[:, 4:19]  # 15ch material after coords+thickness
-                for i in range(len(mat_data)):
-                    sig = material_vec_signature(mat_data[i])
-                    all_material_vecs[vehicle].add(sig)
-
-        # union bbox
-        if all_xyz:
-            union_xyz = np.concatenate(all_xyz, axis=0)
+        hics = np.array(all_hics) if all_hics else np.array([0])
+        if all_xyz_list:
+            union_xyz = np.concatenate(all_xyz_list, axis=0)
             union_bbox = bbox_stats(union_xyz)
-            mean_sample_bbox = {
-                "diag": float(np.mean([b["diag"] for b in bboxes_sample])),
-                "x": float(np.mean([b["x"] for b in bboxes_sample])),
-                "y": float(np.mean([b["y"] for b in bboxes_sample])),
-                "z": float(np.mean([b["z"] for b in bboxes_sample])),
-            }
+            mean_sample_bbox_diag = float(np.mean([b["diag"] for b in all_bboxes_sample]))
         else:
             union_bbox = {"diag": 0, "x": 0, "y": 0, "z": 0}
-            mean_sample_bbox = {"diag": 0, "x": 0, "y": 0, "z": 0}
+            mean_sample_bbox_diag = 0
 
-        hics = np.array(hics)
         row = {
             "vehicle": vehicle,
             "car_dir": car_dir,
             "total_samples": total_samples,
             "hic_zero_count": hic_zero_count,
-            "hic_mean": float(np.mean(hics)) if len(hics) else 0,
-            "hic_max": float(np.max(hics)) if len(hics) else 0,
-            "hic_min": float(np.min(hics)) if len(hics) else 0,
+            "hic_mean": float(np.mean(hics)),
+            "hic_max": float(np.max(hics)),
+            "hic_min": float(np.min(hics)),
             "hic_gt2k_count": int(np.sum(hics > 2000)),
-            "adult_count": sum(1 for a in ages if a == 1 or a == "Adult"),
-            "child_count": sum(1 for a in ages if a == 0 or a == "Child"),
+            "adult_count": adult_count,
+            "child_count": child_count,
             "union_bbox_diag": union_bbox["diag"],
-            "mean_sample_bbox_diag": mean_sample_bbox["diag"],
+            "mean_sample_bbox_diag": mean_sample_bbox_diag,
             "unique_material_vectors": len(all_material_vecs[vehicle]),
         }
         rows.append(row)
-        print(f"  samples={total_samples}  hic_zero={hic_zero_count}  "
-              f"hic_mean={row['hic_mean']:.0f}  hic_max={row['hic_max']:.0f}  "
-              f"hic>2k={row['hic_gt2k_count']}  "
+        print(f"  samples={total_samples}  hic_mean={row['hic_mean']:.0f}  "
+              f"hic_max={row['hic_max']:.0f}  hic>2k={row['hic_gt2k_count']}  "
               f"union_diag={union_bbox['diag']:.0f}mm  "
               f"mat_vecs={row['unique_material_vectors']}")
 
-    # ---- 跨车分析 ----
-    # 1. bbox scale vs old normal mean
-    normal_diags = [r["union_bbox_diag"] for r in rows if r["vehicle"] in old_normal_set and r["union_bbox_diag"] > 0]
+    # ---- cross-vehicle analysis ----
+    # bbox scale vs old normal median
+    normal_diags = [r["union_bbox_diag"] for r in rows
+                    if r["vehicle"] in old_normal_set and r["union_bbox_diag"] > 0]
     if len(normal_diags) >= 3:
-        # 使用中位数（稳健）
         old_normal_median_diag = float(np.median(normal_diags))
     else:
-        # fallback: 使用所有 normal 车（包括新 normal）的中位数
-        all_normal_diags = [r["union_bbox_diag"] for r in rows if r["union_bbox_diag"] > 0]
-        old_normal_median_diag = float(np.median(all_normal_diags)) if all_normal_diags else 2800
+        all_diags = [r["union_bbox_diag"] for r in rows if r["union_bbox_diag"] > 0]
+        old_normal_median_diag = float(np.median(all_diags)) if all_diags else 2800
 
     for r in rows:
         if r["union_bbox_diag"] > 0:
@@ -228,11 +278,10 @@ def run_diagnostics(car_files, old_normal_set):
         else:
             r["bbox_ratio_vs_normal"] = float("nan")
 
-    # 2. material vector overlap vs old normal union
+    # material vector overlap
     old_normal_vec_union = set()
     for v in old_normal_set:
-        if v in all_material_vecs:
-            old_normal_vec_union |= all_material_vecs[v]
+        old_normal_vec_union |= all_material_vecs.get(v, set())
 
     for r in rows:
         v = r["vehicle"]
@@ -246,11 +295,11 @@ def run_diagnostics(car_files, old_normal_set):
             r["mat_vec_only_count"] = len(vecs - old_normal_vec_union)
         r["is_old_normal"] = v in old_normal_set
 
-    # 3. hard-only material vectors (only in non-normal, not in any normal)
+    # hard-only material vectors
     all_normal_vec_union = set()
     for r2 in rows:
         all_normal_vec_union |= all_material_vecs.get(r2["vehicle"], set())
-    # Identify hard cars: either old hard (CY02C, M6) or new cars with low overlap
+
     hard_car_candidates = []
     for r2 in rows:
         if r2["vehicle"] in ("CY02C", "M6"):
@@ -271,7 +320,6 @@ def run_diagnostics(car_files, old_normal_set):
 def write_output(rows, hard_only, old_normal_median_diag, output_dir, old_normal_set):
     os.makedirs(output_dir, exist_ok=True)
 
-    # JSON report
     report = {
         "old_normal_vehicles": list(old_normal_set),
         "old_normal_median_union_diag_mm": old_normal_median_diag,
@@ -285,7 +333,6 @@ def write_output(rows, hard_only, old_normal_median_diag, output_dir, old_normal
         json.dump(report, f, indent=2, ensure_ascii=False, default=str)
     print(f"\n[JSON] {json_path}")
 
-    # CSV summary
     csv_path = os.path.join(output_dir, "qa_summary.csv")
     csv_cols = [
         "vehicle", "car_dir", "total_samples", "hic_zero_count", "hic_mean",
@@ -298,21 +345,21 @@ def write_output(rows, hard_only, old_normal_median_diag, output_dir, old_normal
         w.writerows(rows)
     print(f"[CSV]  {csv_path}")
 
-    # Print summary table
-    print("\n" + "=" * 80)
+    # summary table
+    print("\n" + "=" * 95)
     print("QA Summary")
-    print("=" * 80)
-    header = f"{'Vehicle':<14} {'Samples':>8} {'HIC=0':>6} {'HIC Mean':>9} {'HIC Max':>9} {'>2k':>5} {'Diag':>7} {'BboxRatio':>10} {'MatVec':>7} {'Overlap':>8} {'Only':>5}"
-    print(header)
-    print("-" * len(header))
+    print("=" * 95)
+    hdr = f"{'Vehicle':<14} {'Samples':>8} {'HIC Mean':>9} {'HIC Max':>9} {'>2k':>5} {'Diag':>7} {'BboxRatio':>10} {'MatVec':>7} {'Overlap':>8} {'Only':>5}"
+    print(hdr)
+    print("-" * len(hdr))
     for r in rows:
-        print(f"{r['vehicle']:<14} {r['total_samples']:>8} {r['hic_zero_count']:>6} "
-              f"{r['hic_mean']:>9.0f} {r['hic_max']:>9.0f} {r['hic_gt2k_count']:>5} "
+        print(f"{r['vehicle']:<14} {r['total_samples']:>8} {r['hic_mean']:>9.0f} "
+              f"{r['hic_max']:>9.0f} {r['hic_gt2k_count']:>5} "
               f"{r['union_bbox_diag']:>7.0f} {r['bbox_ratio_vs_normal']:>10.2f} "
               f"{r['unique_material_vectors']:>7} {r['mat_vec_overlap_vs_old']:>8.2f} "
               f"{r.get('mat_vec_only_count', 0):>5}")
 
-    # Flag issues
+    # flags
     print("\n--- FLAGS ---")
     flags = 0
     for r in rows:
@@ -322,7 +369,7 @@ def write_output(rows, hard_only, old_normal_median_diag, output_dir, old_normal
         if r["total_samples"] < 30:
             print(f"  [WARN] {r['vehicle']}: only {r['total_samples']} samples (<30) — low-statistics fold")
             flags += 1
-        if r["bbox_ratio_vs_normal"] < 0.8 or r["bbox_ratio_vs_normal"] > 1.2:
+        if not np.isnan(r["bbox_ratio_vs_normal"]) and (r["bbox_ratio_vs_normal"] < 0.8 or r["bbox_ratio_vs_normal"] > 1.2):
             print(f"  [INFO] {r['vehicle']}: bbox ratio {r['bbox_ratio_vs_normal']:.2f} outside [0.8, 1.2]")
             flags += 1
         if r["mat_vec_overlap_vs_old"] < 0.80 and not r["is_old_normal"]:
@@ -341,19 +388,15 @@ def main():
     print(f"Data dir: {args.data_dir}")
     print(f"Old normal vehicles: {old_normal_set}")
 
-    # Collect
     car_files = collect_feather_files(args.data_dir)
     if not car_files:
         print("[ERROR] No .feather files found.")
         return
 
-    vehicle_names = [extract_car_name(c) for c in car_files]
-    print(f"Found {len(car_files)} vehicles: {vehicle_names}")
+    vehicles = [extract_vehicle_identifier(files[0]) for files in car_files.values()]
+    print(f"Found {len(car_files)} vehicles: {vehicles}")
 
-    # Diagnose
     rows, hard_only, normal_median_diag = run_diagnostics(car_files, old_normal_set)
-
-    # Write
     write_output(rows, hard_only, normal_median_diag, args.output_dir, old_normal_set)
 
 
