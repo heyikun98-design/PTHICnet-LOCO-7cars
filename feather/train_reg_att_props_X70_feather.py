@@ -57,7 +57,10 @@ def parse_args():
     parser.add_argument('--train_data_dir', type=str, default='data/train', help='train data folder')
     parser.add_argument('--test_data_dir', type=str, default='data/test', help='test data folder')
     parser.add_argument('--seed', type=int, default=42, help='random seed for reproducibility')
-    parser.add_argument('--use_wandb', action='store_true', default=None, help='log to wandb')
+    wandb_group = parser.add_mutually_exclusive_group()
+    wandb_group.add_argument('--use_wandb', dest='use_wandb', action='store_true', help='log to wandb')
+    wandb_group.add_argument('--no_wandb', dest='use_wandb', action='store_false', help='disable wandb')
+    parser.set_defaults(use_wandb=None)
     parser.add_argument('--use_early_fusion', action='store_true', default=False, help='use fused input [xyz+thickness+material]')
     parser.add_argument('--normalize_thickness', action='store_true', default=False, help='normalize thickness into [0,1]')
     parser.add_argument('--ablation_mode', type=str, default=None, choices=['baseline', 'early_fusion_clean', 'pt_hicnet'], help='ablation mode')
@@ -303,6 +306,17 @@ def main(args):
         os.environ["PT_HICNET_NORMALIZATION_PARAMS_PATH"] = str(PROJECT_ROOT / _norm_pkl)
     from data_utils.HICLoader_feather import HICDataLoader, CAR_TO_VEHICLE  # noqa: E402
 
+    def _set_eval_deterministic(loader, flag):
+        def visit(dataset):
+            if hasattr(dataset, "eval_deterministic"):
+                dataset.eval_deterministic = flag
+            if hasattr(dataset, "datasets"):
+                for child in dataset.datasets:
+                    visit(child)
+            if hasattr(dataset, "dataset"):
+                visit(dataset.dataset)
+        visit(loader.dataset)
+
     # 收集全部文件并按车辆划分训练/测试集
     def _collect_all_files(data_dir):
         files = []
@@ -335,6 +349,7 @@ def main(args):
             args=args,
             early_fusion=args.use_early_fusion,
             normalize_thickness=args.normalize_thickness,
+            eval_deterministic=False,
         )
         for fp in train_files
     ]
@@ -517,9 +532,6 @@ def main(args):
         return mse, acc
 
     # --- Training state
-    monitor_loader = val_loader if val_loader is not None else test_loader
-    monitor_name = "val" if val_loader is not None else "test"
-
     global_epoch = 0
     best_instance_mse = float('inf')
     best_mean_accuracy = float('-inf')
@@ -543,6 +555,7 @@ def main(args):
             args=args,
             early_fusion=args.use_early_fusion,
             normalize_thickness=args.normalize_thickness,
+            eval_deterministic=True,
         )
         for fp in test_files
     ]
@@ -554,11 +567,15 @@ def main(args):
     for fp in test_files:
         log_string(f"  - {os.path.basename(fp)}")
 
+    monitor_loader = val_loader if val_loader is not None else test_loader
+    monitor_name = "val" if val_loader is not None else "test"
+
     # --- Train loop
     logger.info('Start training...')
     for epoch in range(args.epoch):
         print(f"\nEpoch {epoch + 1}/{args.epoch}")
         regressor.train()
+        _set_eval_deterministic(train_loader, False)
         epoch_losses = []
         mean_correct = []
 
@@ -615,6 +632,8 @@ def main(args):
             torch.cuda.empty_cache()
 
         scheduler.step()
+        _set_eval_deterministic(monitor_loader, True)
+        _set_eval_deterministic(test_loader, True)
 
         # 记录训练结果
         epoch_loss = float(np.mean(epoch_losses))

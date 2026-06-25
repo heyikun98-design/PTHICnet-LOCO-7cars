@@ -67,6 +67,10 @@ StepLR, but their metric plumbing is not identical:
   `val_accuracy` / `test_accuracy` values in the main table.
 - When comparing architectures, prefer paired per-vehicle deltas over
   cross-script internal training curves.
+- Expanded-data aggregation must pass a strict architecture x vehicle x seed
+  completeness check before any acceptance gate is evaluated.
+- Multi-seed architecture claims must report seed-paired fleet deltas, not only
+  a pooled mean across all folds.
 
 ## Current Frozen Baseline
 
@@ -122,7 +126,8 @@ Soft gates:
 - 7-car Test Std should not increase above 10.0pp.
 - Normal-car Test Std should stay near the current ~2pp band.
 - Multi-seed reporting should use seeds 42, 3407, and 2026 once the expanded
-  dataset is stable.
+  dataset is stable. Report per-seed fleet means and mean +/- std of paired
+  E2-E0 and E3-E2 deltas.
 
 ## Expanded-Data QA Gates
 
@@ -137,6 +142,8 @@ Run these checks before starting large training jobs on new data:
 - Material coverage: report MID overlap and rounded 15D material-vector overlap
   against the old 5-normal-car union. MID IDs can be vehicle-local, so vector
   overlap is the stronger physical check.
+- Material lookup completeness: every MID used by a valid sample must resolve
+  to a 15D material vector. Any unresolved MID is a blocking QA failure.
 - HIC distribution: report per-vehicle mean, max, and `>2k` count. M6 currently
   contains a 140176 HIC outlier; MSE must be interpreted with this tail in mind.
 - Invalid labels: report all HIC=0 samples excluded by `HICLoader_feather.py`.

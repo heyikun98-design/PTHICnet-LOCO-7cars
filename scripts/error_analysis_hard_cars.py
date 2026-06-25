@@ -438,6 +438,7 @@ def load_vehicle_datapoints(vehicle, cfg):
             args=runtime_args,
             early_fusion=True,
             normalize_thickness=bool(cfg["data"].get("normalize_thickness", True)),
+            eval_deterministic=True,
         )
         if dataset.datapoints is None:
             len(dataset)
@@ -850,6 +851,7 @@ def infer_one_arch_vehicle(arch, vehicle, run_dir, cfg, args, device):
             args=runtime_args,
             early_fusion=early_fusion,
             normalize_thickness=bool(cfg["data"].get("normalize_thickness", True)),
+            eval_deterministic=True,
         )
         meta = sample_meta(dataset, fp)
         loader = DataLoader(

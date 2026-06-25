@@ -27,10 +27,18 @@ git clone https://github.com/heyikun98-design/PTHICnet-LOCO-7cars.git
 ### 0.3 新数据挂载
 
 ```bash
-# 新车型数据放入 车模型数据/ 目录，命名沿用 car{N}/ 格式
-ls 车模型数据/
+# 数据不进入 Git。将集群已有数据挂载路径写入集群专用配置。
+cp configs/default.yaml configs/phase5_cluster.yaml
+# 编辑 data.data_root、material_lookup_path、normalization_params_path
+# 三个字段都可以使用集群绝对路径。
+
+# 新车型目录命名沿用 car{N}/ 格式
+ls /CLUSTER/DATA/PATH/
 # 预期: car1 car2 ... car{N}  (N >= 8)
 ```
+
+不要上传 `.feather`、checkpoint 或原始材料数据库到 GitHub。Phase 5 命令统一使用
+`--config configs/phase5_cluster.yaml`。集群网络不可用时统一传 `--no_wandb`。
 
 ### 0.4 注册新车型 + 检查材料 lookup
 
@@ -57,10 +65,14 @@ CAR_TO_VEHICLE = {
 ```bash
 python -c "
 import pickle
-with open('feather/material_lookup_by_vehicle.pkl', 'rb') as f:
+with open('/CLUSTER/METADATA/material_lookup_by_vehicle.pkl', 'rb') as f:
     lookup = pickle.load(f)
 print('Vehicles in lookup:', sorted(lookup.keys()))
-print('Expected vehicles:', ['C201','EP32','JX65','CY02C','M6','S50EVK','FX11'] + NEW_CARS)
+expected = ['C201','EP32','JX65','CY02C','M6','S50EVK','FX11',
+            'NEW_CAR_A','NEW_CAR_B']
+missing = sorted(set(expected) - set(lookup))
+print('Missing vehicles:', missing)
+raise SystemExit(1 if missing else 0)
 "
 ```
 
@@ -74,10 +86,15 @@ print('Expected vehicles:', ['C201','EP32','JX65','CY02C','M6','S50EVK','FX11'] 
 
 ```bash
 python scripts/qa_new_data.py \
-  --data_dir 车模型数据 \
+  --data_dir /CLUSTER/DATA/PATH \
   --old_normal_vehicles C201,EP32,JX65,S50EVK,FX11 \
+  --material_lookup_path /CLUSTER/METADATA/material_lookup_by_vehicle.pkl \
+  --normalization_params_path /CLUSTER/METADATA/normalization_params.pkl \
   --output_dir experiments/phase5_qa
 ```
+
+命令必须返回 `exit=0`，且报告末尾必须为 `Critical: 0`。任一车型缺 lookup、
+存在未解析 MID 或材料向量数为 0 时，不得进入训练。
 
 ### 1.2 QA 检查清单
 
@@ -116,21 +133,21 @@ PREFLIGHT_VEHICLES=(JX65 CY02C)
 
 # E2
 python -u scripts/train_pt_hicnet.py \
-  --config configs/default.yaml \
+  --config configs/phase5_cluster.yaml \
   --seed 42 \
   --exp_name phase5_p0/pt_hicnet_loco_e2 \
   --film_mode none --test_vehicles JX65 \
   --val_split 0.15 --split_seed 2026 --patience 50 --restore_best \
-  --material_dropout_prob 0.15
+  --material_dropout_prob 0.15 --no_wandb
 
 # E3
 python -u scripts/train_pt_hicnet.py \
-  --config configs/default.yaml \
+  --config configs/phase5_cluster.yaml \
   --seed 42 \
   --exp_name phase5_p0/pt_hicnet_loco_e3 \
   --film_mode global --test_vehicles JX65 \
   --val_split 0.15 --split_seed 2026 --patience 50 --restore_best \
-  --material_dropout_prob 0.15
+  --material_dropout_prob 0.15 --no_wandb
 
 # ... 再跑 CY02C 的 E2/E3，加 E0
 ```
@@ -164,7 +181,7 @@ python -u scripts/train_pt_hicnet.py \
 PT 脚本实验共用以下参数（不做单折调参）：
 
 ```bash
---config configs/default.yaml
+--config configs/phase5_cluster.yaml
 --val_split 0.15
 --split_seed 2026
 --patience 50
@@ -193,7 +210,12 @@ experiments/
 ```bash
 python scripts/aggregate_loco.py \
   --architectures E0 E2 E3 \
-  --results_root experiments/phase5_p0
+  --results_root experiments/phase5_p0 \
+  --vehicles JX65 CY02C \
+  --normal_cars JX65 \
+  --hard_cars CY02C \
+  --expected_seeds 42 \
+  --strict
 ```
 
 这确保旧 Phase 3 目录、单折 pilot（`pt_hicnet_loco_e3_matdrop015_*`）、P1/P2 ablation 都不会混进 P0 主表。
@@ -241,7 +263,7 @@ for SEED in "${SEEDS[@]}"; do
     EXP_NAME="phase5_p0/pt_hicnet_loco_e0_${V}_seed${SEED}"
     echo "=== E0 test=$V seed=$SEED ==="
     python -u feather/train_reg_att_props_X70_feather.py \
-      --config configs/default.yaml \
+      --config configs/phase5_cluster.yaml \
       --seed $SEED \
       --exp_name $EXP_NAME \
       --test_vehicles $V \
@@ -249,6 +271,7 @@ for SEED in "${SEEDS[@]}"; do
       --split_seed 2026 \
       --patience 50 \
       --batch_size 15 \
+      --no_wandb \
       2>&1 | tee experiments/phase5_logs/E0_seed${SEED}_${V}.log
   done
 done
@@ -273,7 +296,7 @@ for ARCH in E2 E3; do
   for SEED in "${SEEDS[@]}"; do
     for V in "${VEHICLES[@]}"; do
       python -u scripts/train_pt_hicnet.py \
-        --config configs/default.yaml \
+        --config configs/phase5_cluster.yaml \
         --seed $SEED \
         --exp_name $EXP_PREFIX \
         --film_mode $FILM \
@@ -281,6 +304,7 @@ for ARCH in E2 E3; do
         --val_split 0.15 --split_seed 2026 \
         --patience 50 --restore_best \
         --material_dropout_prob 0.15 \
+        --no_wandb \
         2>&1 | tee experiments/phase5_logs/${ARCH}_seed${SEED}_${V}.log
     done
   done
@@ -294,12 +318,13 @@ done
 ```bash
 for V in "${VEHICLES[@]}"; do
   python -u scripts/train_pt_hicnet.py \
-    --config configs/default.yaml \
+    --config configs/phase5_cluster.yaml \
     --seed 42 \
     --exp_name phase5_ablation/pt_hicnet_loco_e3 \
     --film_mode global --test_vehicles $V \
     --val_split 0.15 --split_seed 2026 --patience 50 --restore_best \
     --material_dropout_prob 0.0 \
+    --no_wandb \
     2>&1 | tee experiments/phase5_logs/E3_nodropout_seed42_${V}.log
 done
 ```
@@ -309,12 +334,13 @@ done
 ```bash
 for V in "${VEHICLES[@]}"; do
   python -u scripts/train_pt_hicnet.py \
-    --config configs/default.yaml \
+    --config configs/phase5_cluster.yaml \
     --seed 42 \
     --exp_name phase5_ablation/pt_hicnet_loco_e2 \
     --film_mode none --test_vehicles $V \
     --val_split 0.15 --split_seed 2026 --patience 50 --restore_best \
     --material_dropout_prob 0.0 \
+    --no_wandb \
     2>&1 | tee experiments/phase5_logs/E2_nodropout_seed42_${V}.log
 done
 ```
@@ -337,14 +363,15 @@ done
 ```bash
 # 选一辆熟悉的车（如 JX65）做 smoke test
 python scripts/train_pt_hicnet.py \
-  --config configs/default.yaml \
+  --config configs/phase5_cluster.yaml \
   --seed 42 \
   --film_mode global \
   --test_vehicles JX65 \
   --val_split 0.15 \
   --patience 50 \
   --restore_best \
-  --material_dropout_prob 0.15
+  --material_dropout_prob 0.15 \
+  --no_wandb
 
 # 确认:
 # 1. loss 正常下降
@@ -364,31 +391,43 @@ Smoke test 通过后再启动全量 LOCO-CV。
 ```bash
 python scripts/aggregate_loco.py \
   --architectures E0 E2 E3 \
-  --results_root experiments/phase5_p0
+  --results_root experiments/phase5_p0 \
+  --vehicles C201 EP32 JX65 CY02C M6 S50EVK FX11 NEW_CAR_A NEW_CAR_B \
+  --normal_cars C201 EP32 JX65 S50EVK FX11 NEW_NORMAL_CARS \
+  --hard_cars CY02C M6 NEW_HARD_CARS \
+  --expected_seeds 42 3407 2026 \
+  --strict
 ```
 
-⚠️ **`aggregate_loco.py` 硬编码了 7 车列表和 normal/hard 分组**（`VEHICLES`, `NORMAL_CARS`, `HARD_CARS` 在脚本顶部）。Phase 5 新增车型后需修改这三行：
-
-```python
-VEHICLES = ["C201", "EP32", "JX65", "CY02C", "M6", "S50EVK", "FX11",
-            "NEW_CAR_A", "NEW_CAR_B"]
-NORMAL_CARS = [...]  # 按 QA 结果分组
-HARD_CARS = [...]    # 按 QA 结果分组
-```
+车型和 normal/hard 分组通过 CLI 传入，不再需要改聚合脚本。`--strict` 会在任一
+车型缺少任一 seed、或同一 `(vehicle, seed)` 出现重复结果时返回非零退出码。
 
 P1/P2 ablation 需要单独聚合（可选，不同 `--results_root`）：
 
 ```bash
 python scripts/aggregate_loco.py \
   --architectures E2 E3 \
-  --results_root experiments/phase5_ablation
+  --results_root experiments/phase5_ablation \
+  --vehicles "${VEHICLES[@]}" \
+  --normal_cars "${NORMAL_CARS[@]}" \
+  --hard_cars "${HARD_CARS[@]}" \
+  --expected_seeds 42 \
+  --strict
 ```
 
 **注意 `aggregate_loco.py` 目前只在 stdout 打印，不写文件。** 用 `tee` 保存：
 
 ```bash
+VEHICLES=(C201 EP32 JX65 CY02C M6 S50EVK FX11 NEW_CAR_A NEW_CAR_B)
+NORMAL_CARS=(C201 EP32 JX65 S50EVK FX11 NEW_NORMAL_CARS)
+HARD_CARS=(CY02C M6 NEW_HARD_CARS)
+
 python scripts/aggregate_loco.py --architectures E0 E2 E3 \
   --results_root experiments/phase5_p0 \
+  --vehicles "${VEHICLES[@]}" \
+  --normal_cars "${NORMAL_CARS[@]}" \
+  --hard_cars "${HARD_CARS[@]}" \
+  --expected_seeds 42 3407 2026 --strict \
   2>&1 | tee experiments/phase5_aggregate_p0.txt
 ```
 

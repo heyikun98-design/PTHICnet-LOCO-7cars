@@ -12,6 +12,7 @@ Usage:
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from statistics import mean, stdev
@@ -54,15 +55,12 @@ def _extract_vehicle(dirname):
       Phase 5:  pt_hicnet_loco_e3_C201_seed42_film-global_md0.15
                 → vehicle is token after arch prefix (e3/e2/e0)
     """
-    parts = dirname.split("_")
-    # Phase 3: look for "foldN"
-    for i, p in enumerate(parts):
-        if p.startswith("fold") and i + 1 < len(parts):
-            return parts[i + 1]
-    # Phase 5: after "e0"/"e1"/"e2"/"e3"/"e4" prefix
-    for i, p in enumerate(parts):
-        if p.lower() in ("e0", "e1", "e2", "e3", "e4") and i + 1 < len(parts):
-            return parts[i + 1]
+    phase3 = re.search(r"_fold\d+_(.+?)_seed\d+(?:_|$)", dirname)
+    if phase3:
+        return phase3.group(1)
+    phase5 = re.search(r"_e[0-4]_(.+?)_seed\d+(?:_|$)", dirname)
+    if phase5:
+        return phase5.group(1)
     return "???"
 
 
@@ -73,13 +71,9 @@ def _extract_seed(dirname):
       pt_hicnet_loco_e3_fold3_CY02C_seed42_film-global
       pt_hicnet_loco_e3_C201_seed42_film-global_md0.15
     """
-    parts = dirname.split("_")
-    for i, p in enumerate(parts):
-        if p.startswith("seed") and len(p) > 4:
-            try:
-                return int(p[4:])
-            except ValueError:
-                pass
+    match = re.search(r"(?:^|_)seed(\d+)(?:_|$)", dirname)
+    if match:
+        return int(match.group(1))
     return 0
 
 
@@ -131,12 +125,12 @@ def extract_metrics(history):
     }
 
 
-def aggregate_architecture(results_root, arch):
+def aggregate_architecture(results_root, arch, expected_seeds=None, expected_vehicles=None):
     """Aggregate all folds for one architecture, with multi-seed support.
 
     Returns a dict with:
-      - per_vehicle: {vehicle: {seed: metrics}}  (multi-seed form)
-      - per_vehicle_best: {vehicle: metrics}  (single-seed form, for backward compat)
+      - per_vehicle: {vehicle: mean metrics across seeds}
+      - per_vehicle_seed: {vehicle: {seed: metrics}}
       - seeds: set of seeds found
       - n_folds: unique (vehicle, seed) pairs
     """
@@ -153,6 +147,7 @@ def aggregate_architecture(results_root, arch):
     # per_vehicle_seed[vehicle][seed] = metrics
     per_vehicle_seed = {}
     all_seeds = set()
+    duplicates = []
     for vehicle, seed, hist_path in hist_files:
         metrics = extract_metrics(json.loads(hist_path.read_text()))
         if metrics is None:
@@ -161,6 +156,10 @@ def aggregate_architecture(results_root, arch):
         all_seeds.add(seed)
         if vehicle not in per_vehicle_seed:
             per_vehicle_seed[vehicle] = {}
+        if seed in per_vehicle_seed[vehicle]:
+            duplicates.append((vehicle, seed, str(hist_path)))
+            print(f"[ERROR] {arch}: duplicate result for {vehicle} seed{seed}: {hist_path}")
+            continue
         per_vehicle_seed[vehicle][seed] = metrics
 
     if not per_vehicle_seed:
@@ -176,7 +175,7 @@ def aggregate_architecture(results_root, arch):
             "best_test": mean(tests),
             "best_val": mean(vals),
             "best_mse": mean(m["best_mse"] for m in seed_dict.values()),
-            "gap": mean(tests) - mean(vals),
+            "gap": mean(vals) - mean(tests),
             "best_epoch": int(mean(m["best_epoch"] for m in seed_dict.values())),
         }
         per_vehicle_std[v] = {
@@ -189,6 +188,34 @@ def aggregate_architecture(results_root, arch):
     normal_tests = [per_vehicle_mean[v]["best_test"] for v in NORMAL_CARS if v in per_vehicle_mean]
     hard_tests = [per_vehicle_mean[v]["best_test"] for v in HARD_CARS if v in per_vehicle_mean]
 
+    per_seed = {}
+    for seed in sorted(all_seeds):
+        seed_metrics = {
+            vehicle: seed_dict[seed]
+            for vehicle, seed_dict in per_vehicle_seed.items()
+            if seed in seed_dict
+        }
+        tests = [metrics["best_test"] for metrics in seed_metrics.values()]
+        vals = [metrics["best_val"] for metrics in seed_metrics.values()]
+        normal = [seed_metrics[v]["best_test"] for v in NORMAL_CARS if v in seed_metrics]
+        hard = [seed_metrics[v]["best_test"] for v in HARD_CARS if v in seed_metrics]
+        per_seed[seed] = {
+            "n_vehicles": len(seed_metrics),
+            "mean_val": mean(vals),
+            "mean_test": mean(tests),
+            "normal_mean_test": mean(normal) if normal else 0,
+            "hard_mean_test": mean(hard) if hard else 0,
+        }
+
+    required_seeds = set(expected_seeds or all_seeds)
+    required_vehicles = list(expected_vehicles or per_vehicle_seed.keys())
+    missing = []
+    for vehicle in required_vehicles:
+        present = set(per_vehicle_seed.get(vehicle, {}))
+        for seed in sorted(required_seeds - present):
+            missing.append((vehicle, seed))
+            print(f"[ERROR] {arch}: missing {vehicle} seed{seed}")
+
     return {
         "arch": arch,
         "per_vehicle": per_vehicle_mean,          # backward-compat: vehicle → mean metrics
@@ -196,6 +223,10 @@ def aggregate_architecture(results_root, arch):
         "per_vehicle_std": per_vehicle_std,       # vehicle → std across seeds
         "seeds": sorted(all_seeds),
         "n_seeds": len(all_seeds),
+        "per_seed": per_seed,
+        "missing": missing,
+        "duplicates": duplicates,
+        "coverage_complete": not missing and not duplicates,
         "mean_val": mean(all_vals),
         "std_val": stdev(all_vals) if len(all_vals) > 1 else 0,
         "mean_test": mean(all_tests),
@@ -207,6 +238,61 @@ def aggregate_architecture(results_root, arch):
     }
 
 
+def print_per_seed_summary(agg_results):
+    """Architecture-level fleet metrics for each independent seed."""
+    if not any(r.get("n_seeds", 1) > 1 for r in agg_results):
+        return
+    print("=" * 82)
+    print("TABLE 4: Per-Seed Fleet Summary")
+    print("=" * 82)
+    print(f"{'Arch':<6} {'Seed':>6} {'Cars':>6} {'Val':>9} {'Test':>9} {'Normal':>9} {'Hard':>9}")
+    print("-" * 82)
+    for result in agg_results:
+        for seed, metrics in sorted(result.get("per_seed", {}).items()):
+            print(
+                f"{result['arch']:<6} {seed:>6} {metrics['n_vehicles']:>6} "
+                f"{metrics['mean_val']*100:>8.2f}% {metrics['mean_test']*100:>8.2f}% "
+                f"{metrics['normal_mean_test']*100:>8.2f}% {metrics['hard_mean_test']*100:>8.2f}%"
+            )
+    print()
+
+
+def print_seed_paired_deltas(agg_results):
+    """Paired architecture deltas computed within each seed."""
+    by_arch = {result["arch"]: result for result in agg_results}
+    comparisons = [
+        ("E2", "E0", "PT backbone"),
+        ("E3", "E2", "FiLM global"),
+        ("E4", "E2", "FiLM deep"),
+    ]
+    rows = []
+    for lhs, rhs, label in comparisons:
+        if lhs not in by_arch or rhs not in by_arch:
+            continue
+        common = sorted(set(by_arch[lhs]["per_seed"]) & set(by_arch[rhs]["per_seed"]))
+        deltas = []
+        for seed in common:
+            delta = (
+                by_arch[lhs]["per_seed"][seed]["normal_mean_test"]
+                - by_arch[rhs]["per_seed"][seed]["normal_mean_test"]
+            )
+            deltas.append((seed, delta))
+        if deltas:
+            rows.append((lhs, rhs, label, deltas))
+    if not rows:
+        return
+    print("=" * 82)
+    print("TABLE 5: Seed-Paired Architecture Deltas (Normal Cars)")
+    print("=" * 82)
+    for lhs, rhs, label, deltas in rows:
+        values = [delta for _, delta in deltas]
+        spread = stdev(values) if len(values) > 1 else 0
+        detail = ", ".join(f"seed{seed}={delta*100:+.2f}pp" for seed, delta in deltas)
+        print(f"{lhs}-{rhs} ({label}): {mean(values)*100:+.2f} ± {spread*100:.2f}pp")
+        print(f"  {detail}")
+    print()
+
+
 def print_per_arch_summary(agg_results):
     """Table 1: Per-Architecture LOCO Summary (multi-seed aware)."""
     max_seeds = max((r.get("n_seeds", 1) for r in agg_results), default=1)
@@ -215,7 +301,7 @@ def print_per_arch_summary(agg_results):
     print(f"TABLE 1: Per-Architecture LOCO-CV Summary (best-checkpoint{seed_str})")
     print("=" * 100)
     header = (f"{'Arch':<6} {'Folds':>5} {'Val Mean':>9} {'Val Std':>8} "
-              f"{'Test Mean':>10} {'Test Std':>9} {'5-Normal':>9} {'2-Hard':>8}")
+              f"{'Test Mean':>10} {'Test Std':>9} {'Normal':>9} {'Hard':>8}")
     sep = "-" * 100
     print(header)
     print(sep)
@@ -229,16 +315,16 @@ def print_per_arch_summary(agg_results):
     by_arch = {r["arch"]: r for r in agg_results}
     if "E0" in by_arch and "E2" in by_arch:
         d = by_arch["E2"]["normal_mean_test"] - by_arch["E0"]["normal_mean_test"]
-        print(f"{'E2-E0':<6} {'(PT backbone)':>21} {d*100:>+9.2f}pp (5-normal)")
+        print(f"{'E2-E0':<6} {'(PT backbone)':>21} {d*100:>+9.2f}pp (normal group)")
     if "E2" in by_arch and "E3" in by_arch:
         d = by_arch["E3"]["normal_mean_test"] - by_arch["E2"]["normal_mean_test"]
-        print(f"{'E3-E2':<6} {'(FiLM global)':>21} {d*100:>+9.2f}pp (5-normal)")
+        print(f"{'E3-E2':<6} {'(FiLM global)':>21} {d*100:>+9.2f}pp (normal group)")
     if "E2" in by_arch and "E4" in by_arch:
         d = by_arch["E4"]["normal_mean_test"] - by_arch["E2"]["normal_mean_test"]
-        print(f"{'E4-E2':<6} {'(FiLM deep)':>21} {d*100:>+9.2f}pp (5-normal)")
+        print(f"{'E4-E2':<6} {'(FiLM deep)':>21} {d*100:>+9.2f}pp (normal group)")
     if "E0" in by_arch and "E1" in by_arch:
         d = by_arch["E1"]["normal_mean_test"] - by_arch["E0"]["normal_mean_test"]
-        print(f"{'E1-E0':<6} {'(EF on PN++)':>21} {d*100:>+9.2f}pp (5-normal)")
+        print(f"{'E1-E0':<6} {'(EF on PN++)':>21} {d*100:>+9.2f}pp (normal group)")
     print()
 
 
@@ -360,15 +446,43 @@ def print_paired_delta(agg_results, reference="E3"):
 
 
 def main():
+    global VEHICLES, NORMAL_CARS, HARD_CARS
     parser = argparse.ArgumentParser("aggregate_loco")
     parser.add_argument("--results_root", type=str, default="experiments",
                         help="Parent directory containing fold subdirectories")
     parser.add_argument("--architectures", type=str, nargs="*", default=None,
                         help="Architectures to aggregate (E0 E1 E2 E3 E4, or 'all'). "
                              "Omit for backward-compatible E3-only mode.")
+    parser.add_argument("--vehicles", type=str, nargs="+", default=None,
+                        help="Expected vehicle list; defaults to the frozen Phase 3 list.")
+    parser.add_argument("--normal_cars", type=str, nargs="+", default=None)
+    parser.add_argument("--hard_cars", type=str, nargs="+", default=None)
+    parser.add_argument("--expected_seeds", type=int, nargs="+", default=None,
+                        help="Required seed list, e.g. 42 3407 2026.")
+    parser.add_argument("--strict", action="store_true",
+                        help="Exit non-zero when any vehicle/seed result is missing or duplicated.")
     args = parser.parse_args()
 
     results_root = Path(args.results_root)
+    if args.vehicles:
+        VEHICLES = args.vehicles
+    if args.normal_cars:
+        NORMAL_CARS = args.normal_cars
+    if args.hard_cars:
+        HARD_CARS = args.hard_cars
+
+    grouping_errors = []
+    overlap = sorted(set(NORMAL_CARS) & set(HARD_CARS))
+    ungrouped = sorted(set(VEHICLES) - set(NORMAL_CARS) - set(HARD_CARS))
+    unknown_grouped = sorted((set(NORMAL_CARS) | set(HARD_CARS)) - set(VEHICLES))
+    if overlap:
+        grouping_errors.append(f"vehicles in both normal and hard groups: {overlap}")
+    if ungrouped:
+        grouping_errors.append(f"vehicles missing normal/hard assignment: {ungrouped}")
+    if unknown_grouped:
+        grouping_errors.append(f"grouped vehicles absent from --vehicles: {unknown_grouped}")
+    for error in grouping_errors:
+        print(f"[ERROR] Grouping: {error}")
 
     # Backward compatibility: no --architectures → E3 only
     if args.architectures is None:
@@ -380,16 +494,33 @@ def main():
 
     # Aggregate each architecture
     agg_results = []
+    missing_architectures = []
     for arch in arches:
-        result = aggregate_architecture(results_root, arch)
+        result = aggregate_architecture(
+            results_root,
+            arch,
+            expected_seeds=args.expected_seeds,
+            expected_vehicles=VEHICLES if args.expected_seeds else None,
+        )
         if result:
             agg_results.append(result)
             print(f"[OK] {arch}: {result['n_folds']} folds, "
                   f"val={result['mean_val']*100:.2f}% test={result['mean_test']*100:.2f}%")
+        else:
+            missing_architectures.append(arch)
 
     if not agg_results:
         print("[ERROR] No results found. Check --results_root and --architectures.")
         sys.exit(1)
+
+    incomplete = [result["arch"] for result in agg_results if not result["coverage_complete"]]
+    if missing_architectures:
+        print(f"[COVERAGE] Missing architectures: {', '.join(missing_architectures)}")
+    if incomplete:
+        print(f"[COVERAGE] Incomplete architectures: {', '.join(incomplete)}")
+    if args.strict and (grouping_errors or missing_architectures or incomplete):
+        print("[ERROR] Strict coverage check failed.")
+        sys.exit(2)
 
     # Print per-arch details (backward-compatible format for single arch)
     if len(agg_results) == 1:
@@ -404,7 +535,7 @@ def main():
         print("-" * 48)
         print(f"{'Mean':<10} {r['mean_val']*100:>7.2f}% {r['mean_test']*100:>7.2f}% "
               f"±{r['std_test']*100:.2f}pp")
-        print(f"{'5-normal':<10} {'':>8} {r['normal_mean_test']*100:>7.2f}% "
+        print(f"{'Normal':<10} {'':>8} {r['normal_mean_test']*100:>7.2f}% "
               f"±{r['normal_std_test']*100:.2f}pp")
 
     # Multi-architecture tables
@@ -413,6 +544,8 @@ def main():
         print_per_vehicle_table(agg_results)
         print_paired_delta(agg_results, reference="E3")
         print_multi_seed_per_vehicle(agg_results)
+        print_per_seed_summary(agg_results)
+        print_seed_paired_deltas(agg_results)
 
     # Multi-seed stats for single-arch mode
     if len(agg_results) == 1 and agg_results[0].get("n_seeds", 1) > 1:
@@ -423,6 +556,7 @@ def main():
                 sd = r["per_vehicle_seed"][v]
                 tests = [m["best_test"] * 100 for m in sd.values()]
                 print(f"  {v:<10} seeds={sorted(sd.keys())}  test: {mean(tests):.2f}% ±{stdev(tests):.2f}pp" if len(tests) > 1 else f"  {v:<10} seed={sorted(sd.keys())[0]}  test: {tests[0]:.2f}%")
+        print_per_seed_summary(agg_results)
 
     # JX65 consistency check (single arch E3 or when E3 is included)
     e3_result = next((r for r in agg_results if r["arch"] == "E3"), None)

@@ -134,7 +134,13 @@ def main():
         use_normals=bool(data_cfg["use_normals"]),
     )
     datasets = [
-        HICDataLoader(root=fp, args=runtime_args, early_fusion=True, normalize_thickness=True)
+        HICDataLoader(
+            root=fp,
+            args=runtime_args,
+            early_fusion=True,
+            normalize_thickness=True,
+            eval_deterministic=True,
+        )
         for fp in test_files
     ]
     loader = DataLoader(ConcatDataset(datasets), batch_size=int(train_cfg["batch_size"]), shuffle=False)

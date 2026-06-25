@@ -61,7 +61,10 @@ def parse_args():
     parser.add_argument("--val_split", type=float, default=0.0, help="Fraction of training data to use for validation (0=skip)")
     parser.add_argument("--split_seed", type=int, default=2026, help="Seed for train/val split (independent of training seed)")
     parser.add_argument("--exp_name", type=str, default=None, help="Override experiment name")
-    parser.add_argument("--use_wandb", action="store_true", default=None)
+    wandb_group = parser.add_mutually_exclusive_group()
+    wandb_group.add_argument("--use_wandb", dest="use_wandb", action="store_true")
+    wandb_group.add_argument("--no_wandb", dest="use_wandb", action="store_false")
+    parser.set_defaults(use_wandb=None)
     return parser.parse_args()
 
 
@@ -72,13 +75,16 @@ def load_config(config_path):
 
 def _set_datasets_eval_deterministic(loader, flag):
     """Toggle eval_deterministic on all underlying HICDataLoader datasets."""
-    ds = loader.dataset
-    if hasattr(ds, 'datasets'):  # ConcatDataset
-        for d in ds.datasets:
-            if hasattr(d, 'eval_deterministic'):
-                d.eval_deterministic = flag
-    elif hasattr(ds, 'eval_deterministic'):
-        ds.eval_deterministic = flag
+    def visit(dataset):
+        if hasattr(dataset, "eval_deterministic"):
+            dataset.eval_deterministic = flag
+        if hasattr(dataset, "datasets"):
+            for child in dataset.datasets:
+                visit(child)
+        if hasattr(dataset, "dataset"):
+            visit(dataset.dataset)
+
+    visit(loader.dataset)
 
 
 def set_seed(seed):

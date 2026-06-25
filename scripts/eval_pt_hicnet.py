@@ -243,6 +243,7 @@ def main():
                 args=runtime_args,
                 early_fusion=True,
                 normalize_thickness=bool(data_cfg.get("normalize_thickness", True)),
+                eval_deterministic=True,
             )
             loader = DataLoader(ds, batch_size=eval_batch_size, shuffle=False, num_workers=0)
             key = vehicle_key(fp)

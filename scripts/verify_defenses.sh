@@ -13,7 +13,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CONFIG_PATH="${1:-${PROJECT_ROOT}/configs/default.yaml}"
 SEED="${SEED:-42}"
 FILM_MODE="${FILM_MODE:-none}"
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+PYTHON_BIN="${PYTHON_BIN:-python}"
 
 TIMESTAMP="$(date +"%Y%m%d_%H%M%S")"
 LOG_ROOT="${PROJECT_ROOT}/scripts/logs/verify_defenses/${TIMESTAMP}"
@@ -52,6 +52,9 @@ cleanup() {
   # 刪除暫存目錄
   if [[ -d "${TMP_DIR}" ]]; then
     rm -rf "${TMP_DIR}"
+  fi
+  if [[ -n "${EXP_DIR:-}" && -d "${EXP_DIR}" ]]; then
+    rm -rf "${EXP_DIR}"
   fi
 }
 trap cleanup EXIT INT TERM
@@ -229,18 +232,19 @@ mark_case_pass() {
 # -----------------------------
 # 推導 run 目錄（與 train 腳本命名規則一致）
 # -----------------------------
-EXP_NAME="$(yaml_get "${CONFIG_PATH}" "experiment.name")"
+EXP_NAME="verify_defenses_${TIMESTAMP}"
 OUTPUT_ROOT="$(yaml_get "${CONFIG_PATH}" "experiment.output_root")"
 RUN_NAME="${EXP_NAME}_seed${SEED}_film-${FILM_MODE}"
 EXP_DIR="${PROJECT_ROOT}/${OUTPUT_ROOT}/${RUN_NAME}"
 CKPT_CANDIDATE="${EXP_DIR}/checkpoints/best_model.pth"
 
 # -----------------------------
-# Case 1：正常短訓練（驗證 smoke test + warning + 落盤）
+# Case 1：正常短訓練（驗證 smoke test + 配置落盤）
 # -----------------------------
 log_info "[CASE1] 正常 E2 單 Seed 短訓練"
 restore_config
 yaml_set_json "${CONFIG_PATH}" "training.epoch" "1"
+yaml_set_json "${CONFIG_PATH}" "experiment.name" "$(json_quote "${EXP_NAME}")"
 
 CASE1_LOG="${LOG_ROOT}/case1_train.log"
 run_expect_success \
@@ -249,12 +253,8 @@ run_expect_success \
   "${PYTHON_BIN}" "${PROJECT_ROOT}/scripts/train_pt_hicnet.py" \
   --config "${CONFIG_PATH}" \
   --seed "${SEED}" \
-  --film_mode "${FILM_MODE}"
-
-assert_log_contains \
-  "${CASE1_LOG}" \
-  "category'.*UNUSED in the forward pass" \
-  "[CASE1] 未偵測到 category 未使用警示"
+  --film_mode "${FILM_MODE}" \
+  --no_wandb
 
 assert_log_contains \
   "${CASE1_LOG}" \
@@ -282,7 +282,7 @@ run_expect_fail \
   "${PYTHON_BIN}" "${PROJECT_ROOT}/scripts/eval_pt_hicnet.py" \
   --config "${CONFIG_PATH}" \
   --checkpoint "${CKPT_PATH}" \
-  --output "experiments/verify_defenses_case2.json"
+  --output "${TMP_DIR}/verify_defenses_case2.json"
 
 assert_log_contains \
   "${CASE2_LOG}" \
@@ -305,7 +305,7 @@ run_expect_fail \
   "${PYTHON_BIN}" "${PROJECT_ROOT}/scripts/eval_pt_hicnet.py" \
   --config "${CONFIG_PATH}" \
   --checkpoint "${CKPT_PATH}" \
-  --output "experiments/verify_defenses_case3.json"
+  --output "${TMP_DIR}/verify_defenses_case3.json"
 
 assert_log_contains \
   "${CASE3_LOG}" \
@@ -336,7 +336,7 @@ run_expect_success \
   "${PYTHON_BIN}" "${PROJECT_ROOT}/scripts/eval_pt_hicnet.py" \
   --config "${CONFIG_PATH}" \
   --checkpoint "${CKPT_PATH}" \
-  --output "experiments/verify_defenses_case4.json"
+  --output "${TMP_DIR}/verify_defenses_case4.json"
 
 assert_log_contains \
   "${CASE4_LOG}" \

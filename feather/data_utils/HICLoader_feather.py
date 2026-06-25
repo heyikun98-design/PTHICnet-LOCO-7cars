@@ -284,7 +284,7 @@ def normalize_material_properties(mat_props):
 def load_material_lookup_for_vehicle(vehicle_name):
     """
     根据车辆名称加载材料查找表。
-    返回：numpy [max_mat_id+1, 15]。若缺失则返回零表。
+    返回：{material_id: 15维向量} 的稀疏字典。若缺失则返回空字典。
     """
     global _global_material_lookup, _current_vehicle_name
 
@@ -292,7 +292,7 @@ def load_material_lookup_for_vehicle(vehicle_name):
     # 此时材料属性应该直接从JSON读取，而不需要查表
     if vehicle_name is None:
         print(f"ℹ️  车辆标识符未知，将直接从JSON读取材料属性（不使用查找表）")
-        _global_material_lookup = np.zeros((100, 15), dtype=np.float32)
+        _global_material_lookup = {}
         _current_vehicle_name = None
         return _global_material_lookup
 
@@ -335,16 +335,16 @@ def load_material_lookup_for_vehicle(vehicle_name):
         resolved_key = _resolve_vehicle_key(vehicle_name, material_lookup_dict.keys())
         if resolved_key is None:
             print(f"⚠️ 车辆 {vehicle_name} 的材料数据未找到（可用键示例：如含 .xlsx 或下划线）。使用空的材料查找表。")
-            _global_material_lookup = np.zeros((100, 15), dtype=np.float32)
+            _global_material_lookup = {}
             _current_vehicle_name = vehicle_name
             return _global_material_lookup
 
         # 获取该车辆的材料字典（用匹配到的键）
         vehicle_materials = material_lookup_dict[resolved_key]
-        max_mat_id = max(vehicle_materials.keys()) if vehicle_materials else 0
-        lookup_table = np.zeros((max_mat_id + 1, 15), dtype=np.float32)
-        for mat_id, mat_vec in vehicle_materials.items():
-            lookup_table[mat_id] = mat_vec
+        lookup_table = {
+            int(mat_id): np.asarray(mat_vec, dtype=np.float32)
+            for mat_id, mat_vec in vehicle_materials.items()
+        }
 
         _global_material_lookup = lookup_table
         _current_vehicle_name = vehicle_name
@@ -353,12 +353,12 @@ def load_material_lookup_for_vehicle(vehicle_name):
 
     except FileNotFoundError:
         print(f"❌ 材料查找表文件不存在: {MATERIAL_LOOKUP_PATH}，使用空表")
-        _global_material_lookup = np.zeros((100, 15), dtype=np.float32)
+        _global_material_lookup = {}
         _current_vehicle_name = vehicle_name
         return _global_material_lookup
     except Exception as e:
         print(f"❌ 加载车辆 {vehicle_name} 材料查找表出错: {e}，使用空表")
-        _global_material_lookup = np.zeros((100, 15), dtype=np.float32)
+        _global_material_lookup = {}
         _current_vehicle_name = vehicle_name
         return _global_material_lookup
 
@@ -543,7 +543,7 @@ class HICDataLoader(Dataset):
                 if mid_raw not in (None, ''):
                     try:
                         mid = int(float(mid_raw))
-                        if 0 <= mid < material_lookup_table.shape[0]:
+                        if mid in material_lookup_table:
                             material_props[i] = material_lookup_table[mid]
                         else:
                             material_props[i] = 0.0
