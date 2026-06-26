@@ -34,5 +34,8 @@ venv/
 experiments/pt_hicnet_loco_e3_matdrop015_*/
 experiments/material_awareness/
 
+# Local-only docs (server-side, not for GitHub)
+EXPERIMENT_LOG.md
+
 # Claude Code
 .claude/
